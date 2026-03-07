@@ -1,0 +1,53 @@
+name: f2_telecom
+description: A new Flutter project.
+publish_to: 'none'
+
+# ★ [중요] 앱 업데이트 시 여기를 수정해야 합니다!
+# 형식: 버전이름+빌드번호 (예: 1.0.1+2)
+# 파이어베이스의 latest_app_version과 이 앞자리(1.0.0)를 비교하게 됩니다.
+version: 1.1.3+3
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  
+  # 파이어베이스 & 데이터 관련
+  firebase_core: ^2.32.0
+  firebase_auth: ^4.20.0
+  cloud_firestore: ^4.17.5
+  shared_preferences: ^2.2.3
+  provider: ^6.1.2
+  intl: ^0.19.0
+  csv: ^6.0.0
+  path_provider: ^2.1.3
+  url_launcher: ^6.3.0
+  http: ^1.2.1
+  screenshot: ^3.0.0
+  share_plus: ^9.0.0
+
+  # ★ [추가됨] 내 앱의 버전(1.0.0)을 확인하기 위해 필수!
+  package_info_plus: ^8.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+  flutter_launcher_icons: ^0.13.1 # 아이콘 변경용
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/addresses.csv
+    # 이미지 경로가 실제 폴더와 일치하는지 꼭 확인하세요!
+    # (프로젝트 폴더 안에 assets/images 폴더를 만들고 icon.png를 넣어야 함)
+    - assets/images/icon.png 
+
+# 아이콘 설정 (터미널에서 flutter pub run flutter_launcher_icons 실행 필요)
+flutter_launcher_icons:
+  android: "launcher_icon"
+  ios: true
+  image_path: "assets/images/icon.png"
+  min_sdk_android: 21
