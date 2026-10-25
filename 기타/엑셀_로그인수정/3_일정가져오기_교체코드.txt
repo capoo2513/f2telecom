@@ -1,0 +1,124 @@
+﻿엑셀 [일정 가져오기] 교체 코드 (2차)  앱 -> 엑셀
+=================================================
+고친 점
+ ※ 먼저 [일정] 시트 B~AC 열 서식을 "텍스트"로 바꿔주세요 (숫자가 날짜로 바뀌는 문제)
+ ① 가져온 뒤 달력 화면을 다시 그림 (LoadCalendarFromDB)
+ ② 일정 시트에 그 날짜 줄이 없으면 새로 만들어서 넣음
+ ③ 가져오는 범위: [달력에 보이는 달 전체] + [오늘부터 14일]
+    → 저장할 때 올리는 범위(그 달 전체)와 맞춰서, 앱에서 쓴 일정이 덮어써지지 않게 함
+
+방법
+ Alt+F11 → FirebaseModule → Ctrl+F 로 "Sub 폰데이터가져오기_팀일정" 찾기
+ → Sub ~ End Sub 전체를 아래 코드로 교체 → [디버그] → [컴파일] → 저장
+
+======================== 여기부터 복사 ========================
+
+Sub 폰데이터가져오기_팀일정()
+    Dim ws As Worksheet, wsDB As Worksheet
+    Dim startDate As Date, endDate As Date, d As Date
+    Dim monthStart As Date, monthEnd As Date
+    Dim http As Object, url As String
+    Dim dbRow As Variant, i As Integer, colOffset As Integer
+    Dim textVal As String, nameVal As String
+    Dim ResponseJson As Object, itemsArray As Object, itemObj As Object
+    Dim okDays As Integer, failMsg As String
+
+    Set ws = ThisWorkbook.Sheets("달력")
+    Set wsDB = ThisWorkbook.Sheets("일정")
+
+    If Not IsDate(ws.Range("AA1").Value) Then
+        MsgBox "달력 시트 AA1 에 날짜가 없어 일정을 가져오지 못했습니다.", vbExclamation
+        Exit Sub
+    End If
+
+    ' ★ 지금 달력 화면(글자·배경색·글자색)을 먼저 일정 시트에 저장 → 다시 그려도 색이 유지됨
+    SaveCurrentPage
+
+    ' 가져오는 범위: 달력에 보이는 달 전체 + 오늘부터 14일
+    monthStart = DateSerial(Year(ws.Range("AA1").Value), Month(ws.Range("AA1").Value), 1)
+    monthEnd = DateSerial(Year(ws.Range("AA1").Value), Month(ws.Range("AA1").Value) + 1, 0)
+    startDate = monthStart: If Date < startDate Then startDate = Date
+    endDate = monthEnd: If Date + 14 > endDate Then endDate = Date + 14
+
+    Application.EnableEvents = False   ' 일정 시트에 쓰는 동안 자동 업로드가 돌지 않게
+
+    For d = startDate To endDate
+        url = "https://firestore.googleapis.com/v1/projects/" & PROJECT_ID & "/databases/(default)/documents/CalendarData/" & Format(d, "yyyy-mm-dd")
+
+        Set http = HttpGetNoCache(url)
+        If http Is Nothing Then
+            failMsg = "서버에 연결하지 못했습니다."
+        ElseIf http.Status = 404 Then
+            ' 그 날짜는 앱에도 일정이 없음 → 건너뜀
+        ElseIf http.Status <> 200 Then
+            failMsg = "(" & http.Status & ") " & Left(http.responseText, 200)
+        Else
+            Set ResponseJson = Nothing
+            On Error Resume Next
+            Set ResponseJson = JsonConverter.ParseJson(http.responseText)
+            On Error GoTo 0
+
+            If Not ResponseJson Is Nothing Then
+                If ResponseJson.Exists("fields") Then
+                    If ResponseJson("fields").Exists("items") Then
+                        ' 일정 시트에서 날짜 줄 찾기 (없으면 새로 만들기)
+                        dbRow = Application.Match(CDbl(d), wsDB.Columns("A"), 0)
+                        If IsError(dbRow) Then dbRow = Application.Match(CLng(d), wsDB.Columns("A"), 0)
+                        If IsError(dbRow) Then
+                            dbRow = wsDB.Cells(wsDB.Rows.Count, "A").End(xlUp).Row + 1
+                            wsDB.Cells(dbRow, "A").Value = d
+                            wsDB.Cells(dbRow, "A").NumberFormat = "mm""월"" dd""일"" (aaa)"
+                            Select Case Weekday(d)
+                                Case vbSunday: wsDB.Cells(dbRow, "A").Font.Color = vbRed
+                                Case vbSaturday: wsDB.Cells(dbRow, "A").Font.Color = vbBlue
+                                Case Else: wsDB.Cells(dbRow, "A").Font.Color = vbBlack
+                            End Select
+                        End If
+
+                        Set itemsArray = Nothing
+                        On Error Resume Next
+                        Set itemsArray = ResponseJson("fields")("items")("arrayValue")("values")
+                        On Error GoTo 0
+
+                        If Not itemsArray Is Nothing Then
+                            For i = 1 To itemsArray.Count
+                                If i > 14 Then Exit For
+                                textVal = ""
+                                nameVal = ""
+                                Set itemObj = Nothing
+                                On Error Resume Next
+                                Set itemObj = itemsArray(i)("mapValue")("fields")
+                                If Not itemObj Is Nothing Then
+                                    If itemObj.Exists("text") Then textVal = itemObj("text")("stringValue")
+                                    If itemObj.Exists("name") Then nameVal = itemObj("name")("stringValue")
+                                End If
+                                On Error GoTo 0
+
+                                colOffset = (i - 1) * 2
+                                If CStr(wsDB.Cells(dbRow, 2 + colOffset).Value) <> textVal Then wsDB.Cells(dbRow, 2 + colOffset).NumberFormat = "@": wsDB.Cells(dbRow, 2 + colOffset).Value = textVal
+                                If CStr(wsDB.Cells(dbRow, 3 + colOffset).Value) <> nameVal Then wsDB.Cells(dbRow, 3 + colOffset).NumberFormat = "@": wsDB.Cells(dbRow, 3 + colOffset).Value = nameVal
+                            Next i
+                            okDays = okDays + 1
+                        End If
+                    End If
+                End If
+            End If
+        End If
+        DoEvents
+    Next d
+
+    Application.EnableEvents = True
+
+    ' ★ 달력 화면 다시 그리기 (일정 시트 → 달력)
+    On Error Resume Next
+    LoadCalendarFromDB
+    On Error GoTo 0
+
+    If failMsg <> "" Then
+        MsgBox "일정 일부를 가져오지 못했습니다." & vbCrLf & failMsg, vbExclamation
+    End If
+    Application.StatusBar = "팀일정 " & okDays & "일치 가져옴"
+End Sub
+
+======================== 여기까지 복사 ========================
+

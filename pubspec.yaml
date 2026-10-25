@@ -5,7 +5,7 @@ publish_to: 'none'
 # ★ [중요] 앱 업데이트 시 여기를 수정해야 합니다!
 # 형식: 버전이름+빌드번호 (예: 1.0.1+2)
 # 파이어베이스의 latest_app_version과 이 앞자리(1.0.0)를 비교하게 됩니다.
-version: 1.1.6+6
+version: 1.1.7+7
 
 environment:
   sdk: '>=3.0.0 <4.0.0'

@@ -13,6 +13,7 @@ import 'schedule_screen.dart';
 import 'process_screen.dart';
 import 'du_process_screen.dart';
 import 'admin_screen.dart';
+import 'account_sheet.dart';
 import '../utils/version_util.dart';
 import 'survey/survey_screen.dart';
 // import '../utils/suggestion_helper.dart'; // (없으면 주석 처리)
@@ -389,6 +390,12 @@ class _HomeScreenState extends State<HomeScreen> {
         backgroundColor: Colors.indigo,
         centerTitle: true,
         actions: [
+          // 내 정보: 비밀번호 변경 / 이메일 변경 / 로그아웃
+          IconButton(
+            icon: const Icon(Icons.account_circle, color: Colors.white),
+            tooltip: '내 정보',
+            onPressed: () => showAccountSheet(context),
+          ),
           if (_isAdmin)
             IconButton(
               icon: const Icon(Icons.admin_panel_settings, color: Colors.white),

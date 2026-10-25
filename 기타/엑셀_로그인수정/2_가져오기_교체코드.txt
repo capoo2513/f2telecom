@@ -1,0 +1,195 @@
+﻿엑셀 [가져오기] 매크로 교체 코드  (앱 -> 엑셀)
+=================================================
+고친 점
+ ① 진행내역: list 를 fields 안쪽에서 찾도록 수정 (그동안 항상 0건이던 문제)
+ ② 진행내역/일정: 예전 응답을 재사용하던 캐시 문제 수정 (매번 새로 받아옴)
+ ③ 로그인 토큰(SetAuthHeader) 포함 → 1번에서 넣은 "SetAuthHeader http" 두 줄은 이 코드로 대체됨
+ ④ 서버에서 못 받아오면 이유를 알려줌
+
+방법
+ Alt+F11 → 왼쪽 목록에서 "모든데이터_가져오기" 가 있는 모듈 열기 (FirebaseModule)
+ Ctrl+F 로 아래 두 Sub 를 찾아서 Sub ~ End Sub 전체를 각각 교체하세요.
+   - Sub 폰데이터가져오기_진행내역()
+   - Sub 폰데이터가져오기_팀일정()
+ 그리고 맨 아래 "Function HttpGetNoCache" 를 그 모듈 맨 끝에 붙여넣으세요.
+
+======================== 여기부터 복사 ========================
+
+Sub 폰데이터가져오기_진행내역()
+    Dim http As Object, url As String
+    Dim ws As Worksheet, lastRow As Long
+    Dim ResponseJson As Object
+    Dim InnerJsonString As String
+    Dim DataList As Object
+    Dim item As Object
+    Dim foundCount As Integer
+
+    Set DataList = Nothing
+    url = "https://firestore.googleapis.com/v1/projects/" & PROJECT_ID & "/databases/(default)/documents/Sheet2Data/List"
+
+    Set http = HttpGetNoCache(url)
+    If http Is Nothing Then Exit Sub
+    If http.Status <> 200 Then
+        MsgBox "진행내역을 가져오지 못했습니다. (" & http.Status & ")" & vbCrLf & Left(http.responseText, 200), vbExclamation
+        Exit Sub
+    End If
+
+    ' 1. Firestore 응답 파싱
+    On Error Resume Next
+    Set ResponseJson = JsonConverter.ParseJson(http.responseText)
+    On Error GoTo 0
+
+    ' 2. 실제 데이터 문자열 추출  (★ 수정: list 는 fields 안쪽에 있음)
+    InnerJsonString = ""
+    If Not ResponseJson Is Nothing Then
+        If ResponseJson.Exists("fields") Then
+            If ResponseJson("fields").Exists("list") Then
+                InnerJsonString = ResponseJson("fields")("list")("stringValue")
+            End If
+        End If
+    End If
+
+    ' 3. 내부 데이터 파싱 (배열 형식 강제 변환)
+    If InnerJsonString <> "" Then
+        Dim FinalJsonToParse As String
+        If Left(InnerJsonString, 1) <> "[" And Right(InnerJsonString, 1) <> "]" Then
+            FinalJsonToParse = "[" & InnerJsonString & "]"
+        Else
+            FinalJsonToParse = InnerJsonString
+        End If
+
+        On Error Resume Next
+        Set DataList = JsonConverter.ParseJson(FinalJsonToParse)
+        If Err.Number <> 0 Then Set DataList = Nothing
+        On Error GoTo 0
+    End If
+
+    Set ws = ThisWorkbook.Sheets("진행내역")
+    lastRow = ws.Cells(ws.Rows.Count, "C").End(xlUp).Row
+    foundCount = 0
+
+    ' 4. 리스트 순회 및 엑셀에 쓰기 (국소명 C열 기준으로 있으면 갱신, 없으면 아래에 추가)
+    If Not DataList Is Nothing Then
+        If TypeName(DataList) = "Collection" Then
+            For Each item In DataList
+                Dim iDate As String, iLocal As String, iParent As String, iContent As String
+                Dim iReq As String, iHist As String, iEtc As String
+
+                iDate = item.item("date")
+                iLocal = item.item("local")
+                iParent = item.item("parent")
+                iContent = item.item("content")
+                iReq = item.item("req")
+                iHist = item.item("hist")
+                iEtc = item.item("etc")
+
+                If Trim(iLocal) <> "" Then
+                    Dim isFound As Boolean: isFound = False
+                    Dim r As Long
+
+                    For r = 3 To lastRow
+                        If Trim(ws.Cells(r, "C").Value) = Trim(iLocal) Then
+                            ws.Cells(r, "B").Value = iDate
+                            ws.Cells(r, "D").Value = iParent
+                            ws.Cells(r, "E").Value = iContent
+                            ws.Cells(r, "F").Value = iReq
+                            ws.Cells(r, "G").Value = iHist
+                            ws.Cells(r, "H").Value = iEtc
+                            isFound = True
+                            Exit For
+                        End If
+                    Next r
+
+                    If Not isFound Then
+                        lastRow = lastRow + 1
+                        ws.Cells(lastRow, "B").Value = iDate
+                        ws.Cells(lastRow, "C").Value = iLocal
+                        ws.Cells(lastRow, "D").Value = iParent
+                        ws.Cells(lastRow, "E").Value = iContent
+                        ws.Cells(lastRow, "F").Value = iReq
+                        ws.Cells(lastRow, "G").Value = iHist
+                        ws.Cells(lastRow, "H").Value = iEtc
+                    End If
+                    foundCount = foundCount + 1
+                End If
+            Next item
+        End If
+    End If
+    Application.StatusBar = "진행내역 " & foundCount & "건 가져옴"
+End Sub
+
+Sub 폰데이터가져오기_팀일정()
+    Dim ws As Worksheet, wsDB As Worksheet
+    Dim startDate As Date, endDate As Date, d As Date
+    Dim http As Object, url As String
+    Dim dbRow As Variant, i As Integer, colOffset As Integer
+    Dim textVal As String, nameVal As String
+    Dim ResponseJson As Object, itemsArray As Object, itemObj As Object
+    Dim okDays As Integer
+
+    Set ws = ThisWorkbook.Sheets("달력")
+    Set wsDB = ThisWorkbook.Sheets("일정")
+
+    If Not IsDate(ws.Range("AA1").Value) Then Exit Sub
+    startDate = Date
+    endDate = Date + 14
+
+    For d = startDate To endDate
+        url = "https://firestore.googleapis.com/v1/projects/" & PROJECT_ID & "/databases/(default)/documents/CalendarData/" & Format(d, "yyyy-mm-dd")
+
+        Set http = HttpGetNoCache(url)
+        If Not http Is Nothing Then
+            On Error Resume Next
+            If http.Status = 200 Then
+                dbRow = Application.Match(CDbl(d), wsDB.Columns("A"), 0)
+                If IsError(dbRow) Then dbRow = Application.Match(CLng(d), wsDB.Columns("A"), 0)
+                If Not IsError(dbRow) Then
+                    Set ResponseJson = JsonConverter.ParseJson(http.responseText)
+
+                    If Not ResponseJson Is Nothing Then
+                        If ResponseJson.Exists("fields") Then
+                            If ResponseJson("fields").Exists("items") Then
+                                Set itemsArray = ResponseJson("fields")("items")("arrayValue")("values")
+
+                                For i = 1 To itemsArray.Count
+                                    Set itemObj = itemsArray(i)("mapValue")("fields")
+
+                                    textVal = ""
+                                    nameVal = ""
+                                    If itemObj.Exists("text") Then textVal = itemObj("text")("stringValue")
+                                    If itemObj.Exists("name") Then nameVal = itemObj("name")("stringValue")
+
+                                    colOffset = (i - 1) * 2
+                                    If wsDB.Cells(dbRow, 2 + colOffset).Value <> textVal Then wsDB.Cells(dbRow, 2 + colOffset).Value = textVal
+                                    If wsDB.Cells(dbRow, 3 + colOffset).Value <> nameVal Then wsDB.Cells(dbRow, 3 + colOffset).Value = nameVal
+                                Next i
+                                okDays = okDays + 1
+                            End If
+                        End If
+                    End If
+                End If
+            End If
+            On Error GoTo 0
+        End If
+        DoEvents
+    Next d
+    Application.StatusBar = "팀일정 " & okDays & "일치 가져옴"
+End Sub
+
+' 캐시를 쓰지 않고 항상 서버에서 새로 받아오는 GET (+ 로그인 토큰)
+Function HttpGetNoCache(url As String) As Object
+    Dim http As Object
+    On Error GoTo Fail
+    Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")   ' 윈도우 캐시를 쓰지 않는 방식
+    http.Open "GET", url, False   ' 주소 뒤에 값을 붙이면 Firestore 가 400 오류로 거절함
+    http.setRequestHeader "Cache-Control", "no-cache"
+    http.setRequestHeader "Pragma", "no-cache"
+    SetAuthHeader http
+    http.send
+    Set HttpGetNoCache = http
+    Exit Function
+Fail:
+    Set HttpGetNoCache = Nothing
+End Function
+
+======================== 여기까지 복사 ========================

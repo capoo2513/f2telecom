@@ -59,6 +59,67 @@ class _LoginScreenState extends State<LoginScreen> {
         context, MaterialPageRoute(builder: (_) => const HomeScreen()));
   }
 
+  /// [비밀번호 찾기] 전화번호 → 등록된 이메일로 재설정 메일
+  void _showPasswordReset() {
+    final ctrl = TextEditingController(text: _useEmail ? '' : _idController.text);
+    bool sending = false;
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setD) => AlertDialog(
+          title: const Text("비밀번호 찾기"),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text("가입한 전화번호를 입력하면\n등록된 이메일로 비밀번호 재설정 메일을 보냅니다.",
+                  style: TextStyle(fontSize: 13)),
+              const SizedBox(height: 12),
+              TextField(
+                controller: ctrl,
+                keyboardType: TextInputType.phone,
+                autofocus: true,
+                decoration: const InputDecoration(
+                    labelText: "전화번호",
+                    hintText: "010-1234-5678",
+                    border: OutlineInputBorder()),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx), child: const Text("취소")),
+            ElevatedButton(
+              onPressed: sending
+                  ? null
+                  : () async {
+                      setD(() => sending = true);
+                      final msg = await PhoneAuthService.sendPasswordReset(ctrl.text);
+                      if (!ctx.mounted) return;
+                      Navigator.pop(ctx);
+                      showDialog(
+                        context: context,
+                        builder: (c) => AlertDialog(
+                          title: const Text("비밀번호 찾기"),
+                          content: Text(msg),
+                          actions: [
+                            TextButton(
+                                onPressed: () => Navigator.pop(c),
+                                child: const Text("확인"))
+                          ],
+                        ),
+                      );
+                    },
+              child: sending
+                  ? const SizedBox(
+                      width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Text("메일 보내기"),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _submit() async {
     // 키보드 내리기
     FocusScope.of(context).unfocus();
@@ -136,16 +197,9 @@ class _LoginScreenState extends State<LoginScreen> {
         // ===========================
         // [로그인 로직] 전화번호(또는 이메일) + 비밀번호
         // ===========================
-        final email = await PhoneAuthService.resolveEmail(_idController.text);
-        if (email == null) {
-          throw FirebaseAuthException(
-              code: 'phone-not-found',
-              message: '등록되지 않은 전화번호입니다.');
-        }
-
-        final userCredential = await _auth.signInWithEmailAndPassword(
-          email: email,
-          password: _passwordController.text.trim(),
+        final userCredential = await PhoneAuthService.signIn(
+          _idController.text,
+          _passwordController.text.trim(),
         );
 
         // 3. 승인 여부 확인
@@ -165,6 +219,8 @@ class _LoginScreenState extends State<LoginScreen> {
 
           // 3일 생체인식 자동 로그인용 기록
           await PhoneAuthService.markLoggedIn();
+          // 이메일 변경 인증을 마쳤으면 전화번호 로그인 정보도 새 이메일로 맞춤
+          await PhoneAuthService.syncEmailAfterLogin();
 
           if (mounted) {
             Navigator.pushReplacement(
@@ -190,10 +246,10 @@ class _LoginScreenState extends State<LoginScreen> {
           case 'user-not-found':
           case 'invalid-email':
           case 'invalid-credential': // 최신 파이어베이스에서 자주 뜸
-            message = "전화번호(또는 이메일)나 비밀번호가 틀렸습니다.";
-            break;
           case 'wrong-password':
-            message = "비밀번호가 틀렸습니다.";
+            message = _useEmail
+                ? "이메일 또는 비밀번호가 잘못되었습니다."
+                : "전화번호 또는 비밀번호가 잘못되었습니다.";
             break;
           case 'user-disabled':
             message = "정지된 계정입니다. 관리자에게 문의하세요.";
@@ -362,6 +418,13 @@ class _LoginScreenState extends State<LoginScreen> {
                           minimumSize: const Size(double.infinity, 48)),
                     ),
                   ],
+
+                  // 비밀번호 찾기
+                  if (!_isSignup)
+                    TextButton(
+                      onPressed: _showPasswordReset,
+                      child: const Text("비밀번호를 잊으셨나요? 비밀번호 찾기"),
+                    ),
 
                   // 전화번호가 아직 등록되지 않은 직원용
                   if (!_isSignup)
