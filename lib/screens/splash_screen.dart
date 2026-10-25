@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'home_screen.dart';
 import 'login_screen.dart';
+import '../utils/version_util.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -64,8 +65,8 @@ class _SplashScreenState extends State<SplashScreen>
           String serverVersion = data['android_ver'];
           String downloadUrl = data['url'] ?? "";
 
-          // 3. 버전 비교 (다르면 업데이트 팝업)
-          if (currentVersion != serverVersion) {
+          // 3. 버전 비교 (서버 버전이 더 높을 때만 업데이트 팝업)
+          if (isNewerVersion(serverVersion, currentVersion)) {
             if (!mounted) return;
             _showUpdateDialog(downloadUrl);
             return; // 업데이트 창이 뜨면 로그인 화면으로 넘어가지 않음

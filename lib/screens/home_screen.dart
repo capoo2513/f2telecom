@@ -13,6 +13,7 @@ import 'schedule_screen.dart';
 import 'process_screen.dart';
 import 'du_process_screen.dart';
 import 'admin_screen.dart';
+import '../utils/version_util.dart';
 import 'survey/survey_screen.dart';
 // import '../utils/suggestion_helper.dart'; // (없으면 주석 처리)
 
@@ -142,7 +143,10 @@ class _HomeScreenState extends State<HomeScreen> {
         downloadUrl = data['app_download_url'];
       }
 
-      if (serverAppVersion != myVersion && downloadUrl.isNotEmpty && mounted) {
+      // 서버 버전이 더 높을 때만 업데이트 팝업
+      if (isNewerVersion(serverAppVersion, myVersion) &&
+          downloadUrl.isNotEmpty &&
+          mounted) {
         showDialog(
           context: context,
           barrierDismissible: false,
