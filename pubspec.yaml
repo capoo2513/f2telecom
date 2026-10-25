@@ -5,7 +5,7 @@ publish_to: 'none'
 # ★ [중요] 앱 업데이트 시 여기를 수정해야 합니다!
 # 형식: 버전이름+빌드번호 (예: 1.0.1+2)
 # 파이어베이스의 latest_app_version과 이 앞자리(1.0.0)를 비교하게 됩니다.
-version: 1.1.3+3
+version: 1.1.4+4
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -27,6 +27,8 @@ dependencies:
   http: ^1.2.1
   screenshot: ^3.0.0
   share_plus: ^9.0.0
+  image_picker: ^1.1.2 # [실사] 갤러리 여러 장 선택
+  camera: ^0.11.0 # [실사] 앱 안 연속 촬영
 
   # ★ [추가됨] 내 앱의 버전(1.0.0)을 확인하기 위해 필수!
   package_info_plus: ^8.0.0

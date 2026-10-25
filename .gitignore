@@ -52,3 +52,7 @@ local.properties
 *.jks
 google-services.json
 기타/*.json
+
+# 작업용 백업 폴더 / 엑셀 임시파일 (Git 에 올리지 않음)
+_backup_*/
+~$*

@@ -42,3 +42,8 @@ android {
 flutter {
     source = "../.."
 }
+
+// [실사] 밴드 공유용 FileProvider
+dependencies {
+    implementation("androidx.core:core:1.13.1")
+}

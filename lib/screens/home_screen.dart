@@ -13,6 +13,7 @@ import 'schedule_screen.dart';
 import 'process_screen.dart';
 import 'du_process_screen.dart';
 import 'admin_screen.dart';
+import 'survey/survey_screen.dart';
 // import '../utils/suggestion_helper.dart'; // (없으면 주석 처리)
 
 // 임시 페이지
@@ -42,6 +43,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Map<String, dynamic> _myScores = {};
   bool _isAdmin = false;
+  bool _scoresLoaded = false; // 권한 정보를 받아왔는지 (받기 전엔 메뉴 숨김)
 
   // ★ [추가됨] 앱 버전을 저장할 변수
   String _appVersion = "";
@@ -81,13 +83,17 @@ class _HomeScreenState extends State<HomeScreen> {
           .doc(user.uid)
           .snapshots()
           .listen((doc) {
-        if (doc.exists && mounted) {
-          final data = doc.data()!;
-          setState(() {
+        if (!mounted) return;
+        setState(() {
+          if (doc.exists) {
+            final data = doc.data()!;
             _myScores = data['access_scores'] ?? {};
             _isAdmin = (_myScores['admin'] == 3) || (data['role'] == 'admin');
-          });
-        }
+          }
+          _scoresLoaded = true;
+        });
+      }, onError: (_) {
+        if (mounted) setState(() => _scoresLoaded = true);
       });
     }
   }
@@ -329,6 +335,12 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  // 홈 화면에는 권한 점수가 1 이상인 메뉴만 표시
+  static const _menuKeys = [
+    'address', 'schedule', 'process', 'du_process', 'new_process', 'material'
+  ];
+  bool _canSee(String key) => ((_myScores[key] ?? 0) as num) > 0;
+
   void _handleMenuTap(String key, Widget nextPage) {
     int score = _myScores[key] ?? 0;
 
@@ -403,27 +415,41 @@ class _HomeScreenState extends State<HomeScreen> {
                         TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 20),
                 Expanded(
-                  child: GridView.count(
-                    controller: _scrollController,
-                    crossAxisCount: 2,
-                    crossAxisSpacing: 15,
-                    mainAxisSpacing: 15,
-                    childAspectRatio: 1.1,
-                    children: [
-                      _buildMenuButton("주소록", Icons.import_contacts,
-                          Colors.blue, "address", const AddressBookScreen()),
-                      _buildMenuButton("일정", Icons.calendar_month, Colors.green,
-                          "schedule", const ScheduleScreen()),
-                      _buildMenuButton("진행사항", Icons.assignment, Colors.orange,
-                          "process", const ProcessScreen()),
-                      _buildMenuButton("DU 진행", Icons.router, Colors.red,
-                          "du_process", const DuProcessScreen()),
-                      _buildMenuButton("공정", Icons.engineering, Colors.teal,
-                          "new_process", const PlaceholderScreen(title: "공정")),
-                      _buildMenuButton("자료", Icons.folder_copy, Colors.purple,
-                          "material", const PlaceholderScreen(title: "자료")),
-                    ],
-                  ),
+                  child: !_scoresLoaded
+                      ? const Center(child: CircularProgressIndicator())
+                      : !_menuKeys.any(_canSee)
+                          ? const Center(
+                              child: Text("사용 권한이 있는 메뉴가 없습니다.\n관리자에게 문의하세요.",
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(fontSize: 16, color: Colors.grey)),
+                            )
+                          : GridView.count(
+                              controller: _scrollController,
+                              crossAxisCount: 2,
+                              crossAxisSpacing: 15,
+                              mainAxisSpacing: 15,
+                              childAspectRatio: 1.1,
+                              children: [
+                                if (_canSee("address"))
+                                  _buildMenuButton("주소록", Icons.import_contacts,
+                                      Colors.blue, "address", const AddressBookScreen()),
+                                if (_canSee("schedule"))
+                                  _buildMenuButton("일정", Icons.calendar_month, Colors.green,
+                                      "schedule", const ScheduleScreen()),
+                                if (_canSee("process"))
+                                  _buildMenuButton("진행사항", Icons.assignment, Colors.orange,
+                                      "process", const ProcessScreen()),
+                                if (_canSee("du_process"))
+                                  _buildMenuButton("DU 진행", Icons.router, Colors.red,
+                                      "du_process", const DuProcessScreen()),
+                                if (_canSee("new_process"))
+                                  _buildMenuButton("실사", Icons.fact_check, Colors.teal,
+                                      "new_process", const SurveyStartScreen()),
+                                if (_canSee("material"))
+                                  _buildMenuButton("자료", Icons.folder_copy, Colors.purple,
+                                      "material", const PlaceholderScreen(title: "자료")),
+                              ],
+                            ),
                 ),
               ],
             ),

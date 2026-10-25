@@ -106,7 +106,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       'address': '📒 주소록',
       'process': '📝 진행 내역',
       'du_process': '🏗️ DU 공정',
-      'new_process': '⚙️ 공정 (New)',
+      'new_process': '📷 실사',
       'material': '📂 자료 (New)',
       'admin': '👮 관리자 메뉴'
     };

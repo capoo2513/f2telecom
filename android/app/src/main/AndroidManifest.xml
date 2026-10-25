@@ -3,8 +3,16 @@
 
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <!-- [실사] 앱 안 연속 촬영 카메라 -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <!-- [실사] 촬영 시 진동 -->
+    <uses-permission android:name="android.permission.VIBRATE"/>
+    <!-- [실사] 안드로이드 9 이하에서 촬영 사진을 갤러리에 저장할 때만 사용 -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28"/>
 
     <queries>
+        <!-- [실사] 밴드 앱 바로 열기 -->
+        <package android:name="com.nhn.android.band" />
         <package android:name="com.skt.tmap.ku" />
         
         <intent>
@@ -21,6 +29,10 @@
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
+        </intent>
+        <!-- [실사] 카메라 앱 호출 -->
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
         </intent>
     </queries>
 
@@ -49,6 +61,17 @@
             </intent-filter>
         </activity>
         
+        <!-- [실사] 밴드로 사진 넘길 때 사용 -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.f2fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/f2_file_paths" />
+        </provider>
+
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
