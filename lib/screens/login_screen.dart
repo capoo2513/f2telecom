@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'home_screen.dart';
+import '../services/phone_auth_service.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -12,12 +13,51 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   final _auth = FirebaseAuth.instance;
-  final _emailController = TextEditingController();
+  final _idController = TextEditingController(); // 로그인: 전화번호 (또는 이메일)
+  final _emailController = TextEditingController(); // 회원가입: 이메일
+  final _phoneController = TextEditingController(); // 회원가입: 전화번호
   final _passwordController = TextEditingController();
   final _nameController = TextEditingController(); // 이름 입력용
 
   bool _isSignup = false; // true면 회원가입 모드
   bool _isLoading = false;
+  bool _canBiometric = false; // 3일 이내 로그인 기록이 있으면 [지문으로 로그인] 버튼 표시
+  bool _useEmail = false; // 전화번호 등록 전 직원용: 이메일로 로그인
+
+  @override
+  void initState() {
+    super.initState();
+    _checkBiometricAvailable();
+  }
+
+  @override
+  void dispose() {
+    _idController.dispose();
+    _emailController.dispose();
+    _phoneController.dispose();
+    _passwordController.dispose();
+    _nameController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _checkBiometricAvailable() async {
+    final ok = await PhoneAuthService.isSessionValid();
+    if (mounted) setState(() => _canBiometric = ok);
+  }
+
+  /// [지문으로 로그인] (3일 이내)
+  Future<void> _biometricLogin() async {
+    if (!await PhoneAuthService.isSessionValid()) {
+      if (mounted) setState(() => _canBiometric = false);
+      return;
+    }
+    final ok = await PhoneAuthService.unlockWithBiometrics();
+    if (!ok || !mounted) return;
+    await PhoneAuthService.markLoggedIn(); // 3일 다시 시작
+    if (!mounted) return;
+    Navigator.pushReplacement(
+        context, MaterialPageRoute(builder: (_) => const HomeScreen()));
+  }
 
   void _submit() async {
     // 키보드 내리기
@@ -33,6 +73,15 @@ class _LoginScreenState extends State<LoginScreen> {
           throw FirebaseAuthException(
               code: 'missing-name', message: '이름을 입력해주세요.');
         }
+        final phone = PhoneAuthService.cleanPhone(_phoneController.text);
+        if (phone.length < 10) {
+          throw FirebaseAuthException(
+              code: 'missing-phone', message: '전화번호를 입력해주세요.');
+        }
+        if (await PhoneAuthService.isPhoneTaken(phone)) {
+          throw FirebaseAuthException(
+              code: 'phone-already-in-use', message: '이미 등록된 전화번호입니다.');
+        }
 
         // 1. Firebase Auth에 계정 생성
         final userCredential = await _auth.createUserWithEmailAndPassword(
@@ -40,14 +89,12 @@ class _LoginScreenState extends State<LoginScreen> {
           password: _passwordController.text.trim(),
         );
 
-        // ★ [여기가 핵심 수정 부분입니다] ★
-        // 계정이 만들어진 직후, Auth 프로필에 이름을 강제로 심어줍니다.
+        // 계정이 만들어진 직후, Auth 프로필에 이름을 넣어줍니다.
         if (userCredential.user != null) {
           await userCredential.user!
               .updateDisplayName(_nameController.text.trim());
           await userCredential.user!.reload(); // (선택사항) 정보 갱신
         }
-        // ------------------------------------------
 
         // 2. Firestore DB에 사용자 정보 저장
         await FirebaseFirestore.instance
@@ -56,6 +103,7 @@ class _LoginScreenState extends State<LoginScreen> {
             .set({
           'email': _emailController.text.trim(),
           'name': _nameController.text.trim(),
+          'phone': phone,
           'role': 'user',
           'level': 1,
           'isApproved': false,
@@ -63,18 +111,40 @@ class _LoginScreenState extends State<LoginScreen> {
           'lastLogin': FieldValue.serverTimestamp(),
         });
 
+        // 3. 전화번호 로그인용 색인 저장
+        final err = await PhoneAuthService.setPhone(
+          uid: userCredential.user!.uid,
+          email: _emailController.text.trim(),
+          newPhone: phone,
+        );
+        if (err != null) debugPrint('전화번호 색인 저장 실패: $err');
+
+        // 승인 전이므로 로그아웃 상태로 돌려놓기
+        await _auth.signOut();
+
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(content: Text("가입 신청 완료! 관리자 승인 대기중.")));
-          // 가입 성공 후 로그인 화면으로 전환
-          setState(() => _isSignup = false);
+          // 가입 성공 후 로그인 화면으로 전환 (전화번호 미리 채움)
+          setState(() {
+            _isSignup = false;
+            _idController.text = PhoneAuthService.formatPhone(phone);
+            _passwordController.clear();
+          });
         }
       } else {
         // ===========================
-        // [로그인 로직]
+        // [로그인 로직] 전화번호(또는 이메일) + 비밀번호
         // ===========================
+        final email = await PhoneAuthService.resolveEmail(_idController.text);
+        if (email == null) {
+          throw FirebaseAuthException(
+              code: 'phone-not-found',
+              message: '등록되지 않은 전화번호입니다.');
+        }
+
         final userCredential = await _auth.signInWithEmailAndPassword(
-          email: _emailController.text.trim(),
+          email: email,
           password: _passwordController.text.trim(),
         );
 
@@ -93,11 +163,8 @@ class _LoginScreenState extends State<LoginScreen> {
             'lastLogin': FieldValue.serverTimestamp(),
           });
 
-          // 자동 로그인을 위한 로컬 저장
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setString(
-              'last_login_date', DateTime.now().toIso8601String());
-          await prefs.setBool('is_logged_in', true);
+          // 3일 생체인식 자동 로그인용 기록
+          await PhoneAuthService.markLoggedIn();
 
           if (mounted) {
             Navigator.pushReplacement(
@@ -123,7 +190,7 @@ class _LoginScreenState extends State<LoginScreen> {
           case 'user-not-found':
           case 'invalid-email':
           case 'invalid-credential': // 최신 파이어베이스에서 자주 뜸
-            message = "이메일이 존재하지 않거나 아이디/비밀번호가 틀렸습니다.";
+            message = "전화번호(또는 이메일)나 비밀번호가 틀렸습니다.";
             break;
           case 'wrong-password':
             message = "비밀번호가 틀렸습니다.";
@@ -131,10 +198,16 @@ class _LoginScreenState extends State<LoginScreen> {
           case 'user-disabled':
             message = "정지된 계정입니다. 관리자에게 문의하세요.";
             break;
+          case 'phone-not-found':
+            message = "등록되지 않은 전화번호입니다.\n관리자에게 전화번호 등록을 요청하세요.";
+            break;
 
           // --- 회원가입 관련 에러 ---
           case 'email-already-in-use':
             message = "이미 가입된 이메일 주소입니다. 로그인을 시도해주세요.";
+            break;
+          case 'phone-already-in-use':
+            message = "이미 등록된 전화번호입니다. 로그인을 시도해주세요.";
             break;
           case 'weak-password':
             message = "비밀번호 보안이 취약합니다. 6자리 이상 영문/숫자를 섞어주세요.";
@@ -155,12 +228,17 @@ class _LoginScreenState extends State<LoginScreen> {
           case 'missing-name':
             message = "이름을 입력해주세요.";
             break;
+          case 'missing-phone':
+            message = "전화번호를 입력해주세요.";
+            break;
 
           // --- 그 외 알 수 없는 에러 코드 ---
           default:
             message = "오류 발생: [${e.code}] 관리자에게 문의하세요.";
             break;
         }
+      } else if (e is FirebaseException && e.code == 'permission-denied') {
+        message = "전화번호 조회 권한이 없습니다.\n관리자에게 문의하세요. (Firestore 규칙 확인 필요)";
       }
       // Firebase 에러가 아닌 일반 프로그래밍 에러일 때
       else {
@@ -207,12 +285,42 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   const SizedBox(height: 20),
 
-                  TextField(
-                      controller: _emailController,
-                      keyboardType: TextInputType.emailAddress,
-                      decoration: const InputDecoration(
-                          labelText: "이메일", border: OutlineInputBorder())),
-                  const SizedBox(height: 10),
+                  if (!_isSignup) ...[
+                    // 로그인: 전화번호 (전화번호 등록 전이면 이메일)
+                    TextField(
+                        key: ValueKey(_useEmail),
+                        controller: _idController,
+                        keyboardType: _useEmail
+                            ? TextInputType.emailAddress
+                            : TextInputType.phone,
+                        decoration: InputDecoration(
+                            labelText: _useEmail ? "이메일" : "전화번호",
+                            hintText: _useEmail ? null : "010-1234-5678",
+                            prefixIcon: Icon(_useEmail
+                                ? Icons.email_outlined
+                                : Icons.phone_android),
+                            border: const OutlineInputBorder())),
+                    const SizedBox(height: 10),
+                  ] else ...[
+                    // 회원가입: 이메일 + 전화번호
+                    TextField(
+                        controller: _emailController,
+                        keyboardType: TextInputType.emailAddress,
+                        decoration: const InputDecoration(
+                            labelText: "이메일", border: OutlineInputBorder())),
+                    const SizedBox(height: 10),
+                    TextField(
+                        controller: _phoneController,
+                        keyboardType: TextInputType.phone,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.allow(RegExp(r'[0-9-]'))
+                        ],
+                        decoration: const InputDecoration(
+                            labelText: "전화번호 (로그인할 때 사용)",
+                            hintText: "010-1234-5678",
+                            border: OutlineInputBorder())),
+                    const SizedBox(height: 10),
+                  ],
 
                   TextField(
                       controller: _passwordController,
@@ -243,13 +351,38 @@ class _LoginScreenState extends State<LoginScreen> {
                         : Text(_isSignup ? "가입신청" : "로그인"),
                   ),
 
+                  // 3일 이내 로그인 기록이 있으면 지문 로그인 버튼
+                  if (!_isSignup && _canBiometric) ...[
+                    const SizedBox(height: 10),
+                    OutlinedButton.icon(
+                      onPressed: _isLoading ? null : _biometricLogin,
+                      icon: const Icon(Icons.fingerprint),
+                      label: const Text("지문으로 로그인"),
+                      style: OutlinedButton.styleFrom(
+                          minimumSize: const Size(double.infinity, 48)),
+                    ),
+                  ],
+
+                  // 전화번호가 아직 등록되지 않은 직원용
+                  if (!_isSignup)
+                    TextButton(
+                      onPressed: () => setState(() {
+                        _useEmail = !_useEmail;
+                        _idController.clear();
+                      }),
+                      child: Text(_useEmail ? "전화번호로 로그인" : "이메일로 로그인",
+                          style: const TextStyle(fontSize: 13, color: Colors.grey)),
+                    ),
+
                   // 전환 버튼
                   TextButton(
                     onPressed: () {
                       setState(() {
                         _isSignup = !_isSignup;
                         // 에러 방지를 위해 입력창 초기화
+                        _idController.clear();
                         _emailController.clear();
+                        _phoneController.clear();
                         _passwordController.clear();
                         _nameController.clear();
                       });

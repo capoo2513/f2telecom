@@ -24,13 +24,14 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import android.provider.MediaStore
 import androidx.core.content.FileProvider
-import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
 import java.io.FileOutputStream
 
-class MainActivity : FlutterActivity() {
+// 생체인식(local_auth)은 FlutterFragmentActivity 에서만 동작
+class MainActivity : FlutterFragmentActivity() {
     private val galleryChannel = "f2telecom/gallery"
     private val bandChannel = "f2telecom/band"
     private val bandPackage = "com.nhn.android.band"

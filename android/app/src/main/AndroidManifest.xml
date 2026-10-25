@@ -5,6 +5,8 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <!-- [실사] 앱 안 연속 촬영 카메라 -->
     <uses-permission android:name="android.permission.CAMERA"/>
+    <!-- [로그인] 생체인식(지문/얼굴) -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
     <!-- [실사] 촬영 시 진동 -->
     <uses-permission android:name="android.permission.VIBRATE"/>
     <!-- [실사] 안드로이드 9 이하에서 촬영 사진을 갤러리에 저장할 때만 사용 -->

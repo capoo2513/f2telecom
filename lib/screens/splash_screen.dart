@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'home_screen.dart';
 import 'login_screen.dart';
 import '../utils/version_util.dart';
+import '../services/phone_auth_service.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -115,38 +115,33 @@ class _SplashScreenState extends State<SplashScreen>
   }
 
   // 로그인 상태 체크 및 화면 이동
+  // 마지막 로그인 후 3일(72시간) 이내 → 생체인식(지문/얼굴) 확인 후 바로 입장
+  // 3일이 지났으면 → 전화번호 + 비밀번호 다시 입력
   void _checkLogin() async {
     if (!mounted) return;
 
-    final prefs = await SharedPreferences.getInstance();
-    final bool isLoggedIn = prefs.getBool('is_logged_in') ?? false;
-    final String? lastLoginStr = prefs.getString('last_login_date');
-
-    if (isLoggedIn && lastLoginStr != null) {
-      DateTime lastLogin = DateTime.parse(lastLoginStr);
-      DateTime now = DateTime.now();
-
-      // 마지막 로그인으로부터 10일 지났으면 재로그인 유도
-      if (now.difference(lastLogin).inDays >= 10) {
-        await prefs.setBool('is_logged_in', false);
-        if (mounted) {
-          Navigator.pushReplacement(
-              context, MaterialPageRoute(builder: (_) => const LoginScreen()));
-        }
-      } else {
-        // 로그인 유지 -> 메인 화면으로
-        await prefs.setString('last_login_date', now.toIso8601String());
+    if (await PhoneAuthService.isSessionValid()) {
+      final ok = await PhoneAuthService.unlockWithBiometrics();
+      if (!mounted) return;
+      if (ok) {
+        await PhoneAuthService.markLoggedIn(); // 3일 다시 시작
         if (mounted) {
           Navigator.pushReplacement(
               context, MaterialPageRoute(builder: (_) => const HomeScreen()));
         }
+        return;
       }
-    } else {
-      // 미로그인 상태 -> 로그인 화면으로
-      if (mounted) {
-        Navigator.pushReplacement(
-            context, MaterialPageRoute(builder: (_) => const LoginScreen()));
-      }
+      // 지문 취소/실패 → 로그인 화면 ([지문으로 로그인] 버튼으로 다시 시도 가능)
+      Navigator.pushReplacement(
+          context, MaterialPageRoute(builder: (_) => const LoginScreen()));
+      return;
+    }
+
+    // 3일이 지났거나 로그인 기록 없음 → 다시 로그인
+    await PhoneAuthService.clearSession();
+    if (mounted) {
+      Navigator.pushReplacement(
+          context, MaterialPageRoute(builder: (_) => const LoginScreen()));
     }
   }
 

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
+import '../services/phone_auth_service.dart';
 
 class UserManagementScreen extends StatefulWidget {
   const UserManagementScreen({super.key});
@@ -82,6 +83,63 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
         );
       }
     }
+  }
+
+  // 전화번호 등록/변경 (전화번호 로그인용)
+  void _editPhone(BuildContext context, String docId, String name, String email,
+      String phone) {
+    final ctrl = TextEditingController(text: PhoneAuthService.formatPhone(phone));
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text("$name 전화번호"),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text("로그인 이메일: $email",
+                style: const TextStyle(fontSize: 12, color: Colors.grey)),
+            const SizedBox(height: 10),
+            TextField(
+              controller: ctrl,
+              keyboardType: TextInputType.phone,
+              autofocus: true,
+              decoration: const InputDecoration(
+                  labelText: "전화번호",
+                  hintText: "010-1234-5678",
+                  border: OutlineInputBorder()),
+            ),
+            const SizedBox(height: 8),
+            const Text("저장하면 이 번호와 기존 비밀번호로 로그인할 수 있습니다.",
+                style: TextStyle(fontSize: 12, color: Colors.blue)),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text("취소")),
+          ElevatedButton(
+            onPressed: () async {
+              final err = await PhoneAuthService.setPhone(
+                uid: docId,
+                email: email == '-' ? '' : email,
+                newPhone: ctrl.text,
+                oldPhone: phone,
+              );
+              if (!ctx.mounted) return;
+              if (err != null) {
+                ScaffoldMessenger.of(context)
+                    .showSnackBar(SnackBar(content: Text(err)));
+                return;
+              }
+              Navigator.pop(ctx);
+              ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text("'$name' 님 전화번호를 저장했습니다.")));
+            },
+            child: const Text("저장"),
+          ),
+        ],
+      ),
+    );
   }
 
   // ★ [핵심] 권한 설정 다이얼로그 띄우기
@@ -274,6 +332,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
 
               String name = data['name'] ?? '이름없음';
               String email = data['email'] ?? '-';
+              String phone = data['phone'] ?? '';
               bool isApproved = data['isApproved'] ?? false;
 
               // 현재 점수 가져오기 (없으면 빈 맵)
@@ -304,6 +363,13 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(email),
+                        Text(
+                            phone.isEmpty
+                                ? "전화번호 미등록 (📞 눌러서 등록)"
+                                : "전화: ${PhoneAuthService.formatPhone(phone)}",
+                            style: TextStyle(
+                                fontSize: 12,
+                                color: phone.isEmpty ? Colors.orange : Colors.black87)),
                         Text("최근접속: $lastLoginStr",
                             style: const TextStyle(
                                 fontSize: 12, color: Colors.grey)),
@@ -319,6 +385,14 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
+                        // 전화번호 등록/변경
+                        IconButton(
+                          icon: Icon(Icons.phone,
+                              color: phone.isEmpty ? Colors.orange : Colors.green),
+                          tooltip: "전화번호 등록/변경",
+                          onPressed: () =>
+                              _editPhone(context, docId, name, email, phone),
+                        ),
                         // 데이터 전송 버튼
                         if (isApproved)
                           IconButton(
