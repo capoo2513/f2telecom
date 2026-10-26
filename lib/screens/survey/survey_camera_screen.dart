@@ -12,6 +12,8 @@ class SurveyCameraScreen extends StatefulWidget {
   final String baseName; // 파일명 가운데 부분 (예: 정류기1_정류기 전면)
   final String label; // 화면 위 안내 (예: 정류기1 · 정류기 전면)
   final int startNumber; // 이 항목의 다음 사진 번호
+  final String? rootFolder; // 사진첩 폴더 (기본 F2실사, 개통은 F2개통)
+  final String? stamp; // 갤러리 저장본 위쪽에 새길 글자 (개통 선번 등, 없으면 안 새김)
 
   const SurveyCameraScreen({
     super.key,
@@ -19,6 +21,8 @@ class SurveyCameraScreen extends StatefulWidget {
     required this.baseName,
     required this.label,
     required this.startNumber,
+    this.rootFolder,
+    this.stamp,
   });
 
   @override
@@ -119,6 +123,8 @@ class _SurveyCameraScreenState extends State<SurveyCameraScreen>
         station: widget.station,
         baseName: widget.baseName,
         number: widget.startNumber + _taken.length,
+        folder: widget.rootFolder,
+        stamp: widget.stamp,
       );
       _taken.add(res.path);
       _lastName = res.path.split('/').last;
@@ -220,7 +226,7 @@ class _SurveyCameraScreenState extends State<SurveyCameraScreen>
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                   child: Text(
-                      '저장됨: Pictures/${SurveyPhotoService.rootFolder}/${SurveyPhotoService.safeName(widget.station)}/$_lastName',
+                      '저장됨: DCIM/${widget.rootFolder ?? SurveyPhotoService.rootFolder}/${SurveyPhotoService.safeName(widget.station)}/$_lastName',
                       style: const TextStyle(color: Colors.lightGreenAccent, fontSize: 12)),
                 ),
               SizedBox(

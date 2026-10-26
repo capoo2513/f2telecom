@@ -40,18 +40,32 @@ class MainActivity : FlutterFragmentActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        // [실사] 촬영 사진을 휴대폰 갤러리의 Pictures/F2실사/<국소명>/ 에 지정한 파일명으로 저장
+        // [실사] 촬영 사진을 휴대폰 갤러리의 DCIM/F2실사(F2개통)/<국소명>/ 에 지정한 파일명으로 저장
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, galleryChannel)
             .setMethodCallHandler { call, result ->
                 if (call.method == "saveImage") {
                     val path = call.argument<String>("path")
                     val album = call.argument<String>("album")
                     val name = call.argument<String>("name")
+                    val label = call.argument<String>("label") ?: ""
                     if (path == null || album == null || name == null) {
                         result.error("ARG", "path/album/name 누락", null)
                     } else {
                         try {
-                            saveImage(path, album, name)
+                            // label 이 있으면 사진 위쪽에 글자를 새긴 사본을 갤러리에 저장 (개통 선번 등)
+                            var src = path
+                            var tmp: File? = null
+                            if (label.isNotEmpty()) {
+                                try {
+                                    tmp = File(cacheDir, "stamp_" + System.currentTimeMillis() + ".jpg")
+                                    makeLabeledCopy(File(path), label, tmp)
+                                    src = tmp.absolutePath
+                                } catch (e: Exception) {
+                                    src = path // 글자 새기기 실패 시 원본 그대로
+                                }
+                            }
+                            saveImage(src, album, name)
+                            tmp?.delete()
                             result.success(true)
                         } catch (e: Exception) {
                             result.error("SAVE", e.message, null)
@@ -270,7 +284,7 @@ class MainActivity : FlutterFragmentActivity() {
                 put(MediaStore.Images.Media.DISPLAY_NAME, name)
                 put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
                 put(MediaStore.Images.Media.RELATIVE_PATH,
-                    Environment.DIRECTORY_PICTURES + "/" + album)
+                    Environment.DIRECTORY_DCIM + "/" + album)
                 put(MediaStore.Images.Media.IS_PENDING, 1)
             }
             val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
@@ -286,7 +300,7 @@ class MainActivity : FlutterFragmentActivity() {
             // 안드로이드 9 이하: 저장소 쓰기 권한 필요
             @Suppress("DEPRECATION")
             val dir = File(
-                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES),
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM),
                 album
             )
             if (!dir.exists()) dir.mkdirs()

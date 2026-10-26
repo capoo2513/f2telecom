@@ -165,7 +165,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       'process': '📝 진행 내역',
       'du_process': '🏗️ DU 공정',
       'new_process': '📷 실사',
-      'material': '📂 자료 (New)',
+      'material': '🔌 개통',
       'admin': '👮 관리자 메뉴'
     };
 

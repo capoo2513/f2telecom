@@ -12,7 +12,7 @@ class TakenPhoto {
 /// 실사 사진 저장 / 갤러리 선택
 ///
 /// 카메라로 찍은 사진은
-///   휴대폰 사진 > Pictures/F2실사/<국소명>/ 폴더에
+///   휴대폰 사진 > DCIM/F2실사(개통은 F2개통)/<국소명>/ 폴더에
 ///   "<국소명>_<섹션>_<사진명>_<번호>.jpg" 이름으로 저장됩니다.
 /// 앱에서 쓰는 사본은 앱 폴더(survey/<국소명>/)에 보관되어 임시저장 후에도 남습니다.
 class SurveyPhotoService {
@@ -54,6 +54,8 @@ class SurveyPhotoService {
     required String station,
     required String baseName, // 예: 정류기1_정류기_전면
     required int number,
+    String? folder, // 사진첩 폴더 (기본 F2실사, 개통은 F2개통)
+    String? stamp, // 갤러리 저장본 위쪽에 새길 글자 (앱 보관본은 원본 그대로)
   }) async {
     final stationSafe = safeName(station);
     final fileName =
@@ -70,8 +72,9 @@ class SurveyPhotoService {
     try {
       await _channel.invokeMethod('saveImage', {
         'path': destPath,
-        'album': '$rootFolder/$stationSafe',
+        'album': '${folder ?? rootFolder}/$stationSafe',
         'name': destPath.split('/').last,
+        'label': stamp ?? '',
       });
     } catch (e) {
       // 갤러리 저장에 실패해도 앱(밴드 업로드)에서는 계속 사용 가능

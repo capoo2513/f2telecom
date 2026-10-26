@@ -16,6 +16,7 @@ import 'admin_screen.dart';
 import 'account_sheet.dart';
 import '../utils/version_util.dart';
 import 'survey/survey_screen.dart';
+import 'gaetong/gaetong_screen.dart';
 // import '../utils/suggestion_helper.dart'; // (없으면 주석 처리)
 
 // 임시 페이지
@@ -345,6 +346,8 @@ class _HomeScreenState extends State<HomeScreen> {
     'address', 'schedule', 'process', 'du_process', 'new_process', 'material'
   ];
   bool _canSee(String key) => ((_myScores[key] ?? 0) as num) > 0;
+  // 실사·개통은 '조회' 이상(2점~)만 메뉴가 보이고 사용 가능 (잠금·제한은 안 보임)
+  bool _canUse(String key) => ((_myScores[key] ?? 0) as num) >= 2;
 
   void _handleMenuTap(String key, Widget nextPage) {
     int score = _myScores[key] ?? 0;
@@ -453,12 +456,12 @@ class _HomeScreenState extends State<HomeScreen> {
                                 if (_canSee("du_process"))
                                   _buildMenuButton("DU 진행", Icons.router, Colors.red,
                                       "du_process", const DuProcessScreen()),
-                                if (_canSee("new_process"))
+                                if (_canUse("new_process"))
                                   _buildMenuButton("실사", Icons.fact_check, Colors.teal,
                                       "new_process", const SurveyStartScreen()),
-                                if (_canSee("material"))
-                                  _buildMenuButton("자료", Icons.folder_copy, Colors.purple,
-                                      "material", const PlaceholderScreen(title: "자료")),
+                                if (_canUse("material"))
+                                  _buildMenuButton("개통", Icons.cable, Colors.purple,
+                                      "material", const GaetongStartScreen()),
                               ],
                             ),
                 ),

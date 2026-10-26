@@ -11,6 +11,7 @@ import 'survey_templates.dart';
 import 'survey_photo_service.dart';
 import 'survey_camera_screen.dart';
 import 'survey_draft_store.dart';
+import '../gaetong/gaetong_store.dart' show CenterService;
 
 const _bandGreen = Color(0xFF00A032);
 
@@ -31,17 +32,41 @@ class _SurveyStartScreenState extends State<SurveyStartScreen> {
   String _kind = ''; // 상면 / 입전
   SurveyTemplate? _selected;
   List<SurveyDraft> _drafts = [];
+  List<String> _centerNames = []; // 엑셀 통합국 시트 E열 중심국명 (Firebase CenterData)
+  final _stationFocus = FocusNode();
 
   @override
   void initState() {
     super.initState();
     _loadAddresses();
     _loadDrafts();
+    // 국소명 자동완성용 중심국 목록 (실패해도 직접 입력은 가능)
+    CenterService.load(force: true).then((list) {
+      if (mounted) setState(() => _centerNames = list.map((c) => c.name).toList());
+    }).catchError((_) {});
+    _stationFocus.addListener(() {
+      if (mounted) setState(() {});
+    });
+  }
+
+  /// 입력한 글자가 들어간 중심국명 (띄어쓰기·대소문자 무시, 앞부분 일치 먼저, 최대 8개)
+  List<String> _centerMatches() {
+    String norm(String x) => x.replaceAll(RegExp(r'\s+'), '').toLowerCase();
+    final q = norm(_stationCtrl.text);
+    if (q.isEmpty) return [];
+    final hit = _centerNames.where((n) => norm(n).contains(q)).toList();
+    if (hit.length == 1 && hit.first == _station) return []; // 이미 골랐음
+    hit.sort((a, b) {
+      final pa = norm(a).startsWith(q) ? 0 : 1, pb = norm(b).startsWith(q) ? 0 : 1;
+      return pa != pb ? pa - pb : a.compareTo(b);
+    });
+    return hit.take(8).toList();
   }
 
   @override
   void dispose() {
     _stationCtrl.dispose();
+    _stationFocus.dispose();
     _floorCtrl.dispose();
     super.dispose();
   }
@@ -240,13 +265,45 @@ class _SurveyStartScreenState extends State<SurveyStartScreen> {
             _title('① 국소명'),
             TextField(
               controller: _stationCtrl,
+              focusNode: _stationFocus,
               onChanged: (_) => setState(() {}),
-              decoration: const InputDecoration(
-                hintText: '국소명 직접 입력',
-                prefixIcon: Icon(Icons.cell_tower),
-                border: OutlineInputBorder(),
+              decoration: InputDecoration(
+                hintText: '국소명 입력 (중심국명 일부만 쳐도 아래에 목록이 떠요)',
+                prefixIcon: const Icon(Icons.cell_tower),
+                border: const OutlineInputBorder(),
+                suffixIcon: _stationCtrl.text.isEmpty
+                    ? null
+                    : IconButton(
+                        icon: const Icon(Icons.clear),
+                        onPressed: () => setState(() => _stationCtrl.clear()),
+                      ),
               ),
             ),
+            if (_stationFocus.hasFocus && _centerMatches().isNotEmpty)
+              Container(
+                margin: const EdgeInsets.only(top: 4),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  border: Border.all(color: Colors.indigo.shade100),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  children: [
+                    for (final n in _centerMatches())
+                      ListTile(
+                        dense: true,
+                        leading: const Icon(Icons.location_city, size: 20, color: Colors.indigo),
+                        title: Text(n, style: const TextStyle(fontSize: 15)),
+                        onTap: () {
+                          _stationCtrl.text = n;
+                          _stationCtrl.selection = TextSelection.collapsed(offset: n.length);
+                          FocusScope.of(context).unfocus();
+                          setState(() {});
+                        },
+                      ),
+                  ],
+                ),
+              ),
             if (address.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 6, left: 4),
@@ -342,7 +399,7 @@ class _SurveyStartScreenState extends State<SurveyStartScreen> {
             const SizedBox(height: 16),
             // 설치된 앱이 최신인지 확인용 (코드 바꿀 때마다 올림)
             const Center(
-              child: Text('실사 빌드 2026-10-25 #8',
+              child: Text('실사 빌드 2026-10-26 #10',
                   style: TextStyle(fontSize: 11, color: Colors.grey)),
             ),
           ],
@@ -1289,6 +1346,8 @@ class SurveyPreviewScreen extends StatefulWidget {
   final List<String> photos;
   final String draftId;
   final VoidCallback? onCompleted;
+  final String kind; // 실사 / 개통
+  final List<String>? photoLabels; // 사진마다 위쪽에 새길 글자 (photos 와 같은 순서, 없으면 안 새김)
 
   const SurveyPreviewScreen({
     super.key,
@@ -1297,6 +1356,8 @@ class SurveyPreviewScreen extends StatefulWidget {
     required this.photos,
     required this.draftId,
     this.onCompleted,
+    this.kind = '실사',
+    this.photoLabels,
   });
 
   @override
@@ -1347,7 +1408,11 @@ class _SurveyPreviewScreenState extends State<SurveyPreviewScreen> {
             {
               // label 이 비어 있으면 사진에 글자를 새기지 않고 원본 그대로 전달
               'items': [
-                for (final p in widget.photos) {'path': p, 'label': ''}
+                for (var i = 0; i < widget.photos.length; i++)
+                  {
+                    'path': widget.photos[i],
+                    'label': (widget.photoLabels != null && i < widget.photoLabels!.length) ? widget.photoLabels![i] : '',
+                  }
               ],
               'text': text,
             },
@@ -1405,8 +1470,8 @@ class _SurveyPreviewScreenState extends State<SurveyPreviewScreen> {
       context: context,
       builder: (c) => AlertDialog(
         title: const Text('밴드 등록을 마쳤나요?'),
-        content: const Text(
-            '밴드에 다 올렸으면 이 실사를 완료 처리하고 임시저장을 지웁니다.\n아직이면 [나중에]를 누르세요 (임시저장 유지).'),
+        content: Text(
+            '밴드에 다 올렸으면 이 ${widget.kind}을(를) 완료 처리하고 임시저장을 지웁니다.\n아직이면 [나중에]를 누르세요 (임시저장 유지).'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(c, false),
@@ -1422,7 +1487,7 @@ class _SurveyPreviewScreenState extends State<SurveyPreviewScreen> {
     await SurveyDraftStore.remove(widget.draftId);
     if (!mounted) return;
     ScaffoldMessenger.of(context)
-        .showSnackBar(const SnackBar(content: Text('실사 완료!')));
+        .showSnackBar(SnackBar(content: Text('${widget.kind} 완료!')));
     Navigator.popUntil(context, (route) => route.isFirst);
   }
 
