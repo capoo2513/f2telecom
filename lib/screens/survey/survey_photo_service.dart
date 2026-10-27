@@ -83,6 +83,30 @@ class SurveyPhotoService {
     return TakenPhoto(destPath, galleryError);
   }
 
+  /// [개통 센싱] 휴대폰 스크린샷 폴더를 바로 열어 여러 장 선택 → 앱 폴더로 복사
+  ///   안드로이드 쪽 기능을 못 쓰면 일반 갤러리 선택으로 대신
+  static Future<List<String>> pickScreenshots(String station) async {
+    List<String> picked;
+    try {
+      final res = await const MethodChannel('f2telecom/picker').invokeMethod<List<dynamic>>('pickScreenshots');
+      picked = (res ?? const []).map((e) => e.toString()).toList();
+    } catch (_) {
+      return pickFromGallery(station);
+    }
+    if (picked.isEmpty) return [];
+    final dir = await _workDir(station);
+    final out = <String>[];
+    for (var i = 0; i < picked.length; i++) {
+      final dest = await _uniquePath(dir, 'sensing_${DateTime.now().millisecondsSinceEpoch}_$i.jpg');
+      await File(picked[i]).copy(dest);
+      try {
+        await File(picked[i]).delete();
+      } catch (_) {}
+      out.add(dest);
+    }
+    return out;
+  }
+
   /// 갤러리에서 여러 장 선택 → 앱 폴더로 복사 (임시저장 후에도 사진이 남도록)
   static Future<List<String>> pickFromGallery(String station) async {
     final List<XFile> files = await _picker.pickMultiImage();

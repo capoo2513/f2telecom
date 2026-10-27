@@ -399,7 +399,7 @@ class _SurveyStartScreenState extends State<SurveyStartScreen> {
             const SizedBox(height: 16),
             // 설치된 앱이 최신인지 확인용 (코드 바꿀 때마다 올림)
             const Center(
-              child: Text('실사 빌드 2026-10-26 #10',
+              child: Text('실사 빌드 2026-10-27 #12',
                   style: TextStyle(fontSize: 11, color: Colors.grey)),
             ),
           ],

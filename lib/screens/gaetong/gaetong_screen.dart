@@ -21,7 +21,8 @@ const _sub = Color(0xFF5F6473);
 const _teal = Color(0xFF00695C);
 const _doneBg = Color(0xFFE3E6EB);
 const _doneBorder = Color(0xFFD0D4DC);
-const _buildMark = '개통 빌드 2026-10-26 #7';
+const _buildMark = '개통 빌드 2026-10-27 #16';
+const _sensingKey = 'sensing'; // 센싱 사진 (갤러리에서 여러 장, 글자 안 새김, 밴드에 맨 먼저)
 
 void _toast(BuildContext context, String msg) {
   ScaffoldMessenger.of(context)
@@ -124,10 +125,15 @@ class _GaetongStartScreenState extends State<GaetongStartScreen> {
   }
 
   Future<void> _open(GTemplate tpl, String station, Map<String, String> values, Map<String, List<String>> photos) async {
-    if (_centers.isEmpty) {
-      try {
-        _centers = await CenterService.load();
-      } catch (_) {}
+    // 입력 화면을 열 때마다 통합국 목록을 새로 받음 (엑셀에서 고치거나 지운 중심국 바로 반영)
+    try {
+      _centers = await CenterService.load(force: true).timeout(const Duration(seconds: 5));
+    } catch (_) {
+      if (_centers.isEmpty) {
+        try {
+          _centers = await CenterService.load();
+        } catch (_) {}
+      }
     }
     if (!mounted) return;
     await Navigator.push(
@@ -531,7 +537,8 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
 
   /// 사진 자리 (화면 순서): 키, 사진 위에 새길 글자 ('' 이면 안 새김)
   List<(String, String)> _photoSlots() {
-    final out = <(String, String)>[];
+    // 센싱 사진은 밴드에 본문 다음 맨 먼저 (사진 위 글자 없음)
+    final out = <(String, String)>[(_sensingKey, '')];
     for (var si = 0; si < widget.tpl.sections.length; si++) {
       final sec = widget.tpl.sections[si];
       if (sec.photo) out.add((_secKey(sec), _secLabel(sec)));
@@ -670,8 +677,26 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
   }
 
   // 카메라·갤러리 버튼 (+ 찍은 장수)
-  Widget _photoBtns(String key, String stamp) {
+  Widget _photoBtns(String key, String stamp, {bool compact = false}) {
     final n = _photos[key]?.length ?? 0;
+    if (compact) {
+      // 칸 제목 아래 오른쪽 빈자리에 들어가는 작은 버튼
+      Widget ib(IconData ic, String tip, VoidCallback f) => SizedBox(
+            width: 36,
+            height: 32,
+            child: IconButton(padding: EdgeInsets.zero, iconSize: 21, tooltip: tip, icon: Icon(ic, color: _indigo), onPressed: f),
+          );
+      return Row(mainAxisSize: MainAxisSize.min, children: [
+        if (n > 0)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+            decoration: BoxDecoration(color: const Color(0xFFE8F5E9), borderRadius: BorderRadius.circular(10)),
+            child: Text('$n장', style: const TextStyle(fontSize: 11, color: Color(0xFF2E7D32), fontWeight: FontWeight.bold)),
+          ),
+        ib(Icons.photo_camera_outlined, '카메라 촬영', () => _takePhotos(key, stamp, stamp: stamp)),
+        ib(Icons.photo_library_outlined, '갤러리에서 선택', () => _pickPhotos(key)),
+      ]);
+    }
     return Row(mainAxisSize: MainAxisSize.min, children: [
       if (n > 0)
         Container(
@@ -690,6 +715,42 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
           icon: const Icon(Icons.photo_library_outlined, color: _indigo),
           onPressed: () => _pickPhotos(key)),
     ]);
+  }
+
+  // 센싱: 사진 칸 맨 위 (현장 사진 위) · 갤러리 버튼만 · 스크린샷 폴더가 바로 열림
+  //   사진 위 글자 없음, 밴드에는 본문 다음 맨 먼저
+  Widget _sensingBox() {
+    final list = _photos[_sensingKey] ?? const <String>[];
+    return Container(
+      padding: const EdgeInsets.fromLTRB(8, 4, 8, 6),
+      decoration: BoxDecoration(border: Border.all(color: const Color(0xFFDDE0E8)), borderRadius: BorderRadius.circular(8)),
+      child: Column(children: [
+        Row(children: [
+          Icon(Icons.circle, size: 8, color: list.isNotEmpty ? const Color(0xFF2E7D32) : const Color(0xFFB0B4C0)),
+          const SizedBox(width: 6),
+          const Expanded(child: Text('센싱', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold))),
+          if (list.isNotEmpty)
+            Text('${list.length}장', style: const TextStyle(fontSize: 12, color: Color(0xFF2E7D32), fontWeight: FontWeight.bold)),
+          IconButton(
+            tooltip: '스크린샷에서 선택',
+            icon: const Icon(Icons.photo_library_outlined, color: _indigo),
+            onPressed: _pickSensing,
+          ),
+        ]),
+        if (list.isNotEmpty) _thumbs(_sensingKey),
+      ]),
+    );
+  }
+
+  Future<void> _pickSensing() async {
+    try {
+      final paths = await SurveyPhotoService.pickScreenshots(m.names.isNotEmpty ? m.names.first : widget.station);
+      if (paths.isEmpty || !mounted) return;
+      (_photos[_sensingKey] ??= []).addAll(paths);
+      _changed();
+    } catch (e) {
+      if (mounted) _toast(context, '사진 선택 오류: $e');
+    }
   }
 
   // 찍은 사진 작은 그림 (누르면 크게 보기 / 목록에서 빼기)
@@ -993,11 +1054,18 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
 
       case 'alarm1': {
         final on = m.v('$key.o').isNotEmpty;
+        final ex = m.v('$key.ex').isNotEmpty; // 기존활용 (고르면 입력 완료)
+        final nu = m.v('$key.nu').isNotEmpty; // 미사용 (고르면 입력 완료)
+        final plain = !on && !ex && !nu;
+        // 기타·기존활용·미사용은 셋 중 하나만
+        void pick(String k, bool cur) => m.setVals({'$key.o': '', '$key.ex': '', '$key.nu': '', '$key.$k': cur ? '' : '1'});
         rf.rows.add(_row([
-          if (!on) ...[_inp('$key.len', '길이', width: 64, numeric: true), _txt('M'), _txt('×', 'head'), ..._chipsFor('$key.q', ['1', '2', '3'])],
-          _br(),
-          _chip('기타', on, () => m.setVal('$key.o', on ? '' : '1')),
-          if (on) _inp('$key.etc', '예: 신형800 전용1'),
+          if (plain) ...[_inp('$key.len', '길이', width: 64, numeric: true), _txt('M'), _txt('×', 'head'), ..._chipsFor('$key.q', ['1', '2', '3'])],
+          if (plain) _br(),
+          _chip('기타', on, () => pick('o', on)),
+          _chip('기존활용', ex, () => pick('ex', ex)),
+          _chip('미사용', nu, () => pick('nu', nu)),
+          if (on) ...[_br(), _inp('$key.etc', '예: 신형800 전용1')],
         ]));
         rf.note = '수량을 안 고르면 1개로 표시돼요';
         rf.preview = m.out(it, key).join('\n');
@@ -1112,15 +1180,29 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
       }
 
       case 'alarmU': {
-        for (final n in units) {
-          final p = '$key.$n.';
-          rf.rows.add(_row([
-            _inp('${p}len', '길이', width: 64, numeric: true),
-            _txt('M'),
-            _chip('시설팀 포설', m.v('${p}fac').isNotEmpty, () => m.setVal('${p}fac', m.v('${p}fac').isNotEmpty ? '' : '1')),
-          ], title: '${u}_$n', onRemove: unitRm(n), done: m.alarmVal(key, n).isNotEmpty));
+        // 먼저 알람케이블을 쓰는 장비 번호를 고르고 (개통 장비 중에서), 고른 것마다 길이 또는 시설팀 포설
+        final none = m.alarmNone(key);
+        final au = m.alarmUnits(key);
+        void toggleUnit(int n) {
+          final next = au.contains(n) ? au.where((x) => x != n).toList() : ([...au, n]..sort());
+          m.setVals({'$key.sel': next.join(','), '$key.none': ''});
         }
-        unitAdd();
+        rf.rows.add(_row([
+          _txt('사용 장비', 'head'),
+          for (final n in units) _chip('${u}_$n', !none && au.contains(n), () => toggleUnit(n)),
+          _chip('미사용', none, () => m.setVals({'$key.none': none ? '' : '1', '$key.sel': ''})),
+        ]));
+        if (!none) {
+          for (final n in au) {
+            final p = '$key.$n.';
+            rf.rows.add(_row([
+              _inp('${p}len', '길이', width: 64, numeric: true),
+              _txt('M'),
+              _chip('시설팀 포설', m.v('${p}fac').isNotEmpty, () => m.setVal('${p}fac', m.v('${p}fac').isNotEmpty ? '' : '1')),
+            ], title: '${u}_$n', onRemove: () => toggleUnit(n), done: m.alarmVal(key, n).isNotEmpty));
+          }
+          if (au.isEmpty) rf.rows.add(_txt('알람케이블을 쓰는 ${u}를 먼저 고르세요 (개통 $u에서 고른 장비만 나와요)', 'hint'));
+        }
         rf.preview = m.out(it, key).join('\n');
         break;
       }
@@ -1252,6 +1334,19 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
       final c = <Widget>[
         _inp('${p}ut', u.id == 'etc' ? '사용처 직접 입력' : '사용처 문구', display: m.matUsage(it, p, u.id)),
       ];
+      // 4G RRU 리모트 기타: 2.6G용 OJC / 800전용OJP (길이·실거리·타입 없이 수량만)
+      final kinds = u.id == 'etc' ? m.etcKinds(it) : const <String>[];
+      if (kinds.isNotEmpty) {
+        final kind = m.v('${p}kind');
+        c.addAll([
+          _br(),
+          for (final k in kinds) _chip(k, kind == k, () => m.setVal('${p}kind', kind == k ? '' : k), rect: true),
+        ]);
+        if (kind.isNotEmpty) {
+          c.addAll([_br(), _txt('수량', 'head'), _inp('${p}q', '1', width: 48, numeric: true), _txt('EA'), _txt('길이·실거리·타입 없이 올라가요', 'hint')]);
+          return c;
+        }
+      }
       if (u.fixed) {
         c.addAll([_br(), _txt('(파) 2C LC/PC-LC/PC 고정', 'badge')]);
       } else if ((u.def != null || u.rdef) && m.v('${p}edit').isEmpty) {
@@ -1272,11 +1367,12 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
         if (u.def != null || u.rdef) c.addAll([_br(), _chip('변경 완료', true, () => m.setVal('${p}edit', ''))]);
         final colors = it.remote
             ? [['외', '(외)'], ['적외', '(적)(외)'], ['파', '(파)'], ['노', '(노)']]
-            : [['파', '파랑 (파)'], ['노', '노랑 (노)']];
+            : [['파', '파랑 (파)'], ['노', '노랑 (노)'], ['주', '주황 (주)']];
         c.addAll([
           _br(),
           _txt('색', 'head'),
           for (final x in colors) _chip(x[1], m.v('${p}c') == x[0], () => m.setVal('${p}c', m.v('${p}c') == x[0] ? '' : x[0])),
+          _chip('2C', m.v('${p}n') == '2C', () => m.setVal('${p}n', m.v('${p}n') == '2C' ? '' : '2C'), rect: true),
           _br(), ...end(p, 'a'),
           _br(), ...end(p, 'b'),
           if (m.matType(p).isNotEmpty) ...[_br(), _txt(m.matHead(p, u, ignoreRdef: true), 'badge')],
@@ -1514,6 +1610,11 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
       fields.add(Padding(padding: const EdgeInsets.only(bottom: 10), child: _field(x.it, x.key)));
     }
     final done = total > 0 && filled == total;
+    final hasBtns = sec.photo;
+    // 사진 칸(현장 사진이 있는 칸): 맨 위에 센싱
+    if (m.items.any((x) => x.si == si && x.it.type == 'photo')) {
+      fields.insert(0, Padding(padding: const EdgeInsets.only(bottom: 10), child: _sensingBox()));
+    }
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.fromLTRB(10, 4, 10, 4),
@@ -1529,8 +1630,11 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
           child: Row(children: [
             Container(width: 4, height: 20, decoration: BoxDecoration(color: _indigoDark, borderRadius: BorderRadius.circular(2))),
             const SizedBox(width: 6),
-            Expanded(child: Text(sec.title, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: _indigoDark))),
-            if (sec.photo) _photoBtns(_secKey(sec), _secLabel(sec)),
+            Expanded(
+                child: Text(sec.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: _indigoDark))),
             if (total > 0)
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
@@ -1543,9 +1647,29 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
               Text(sec.note!, style: const TextStyle(fontSize: 12, color: _sub)),
           ]),
         ),
-        if (sec.photo && (_photos[_secKey(sec)] ?? const []).isNotEmpty)
-          Padding(padding: const EdgeInsets.only(bottom: 8), child: _thumbs(_secKey(sec))),
-        ...fields,
+        // 센싱·카메라·갤러리 버튼은 제목 아래 오른쪽 빈자리에 (긴 제목이 잘리지 않게)
+        Stack(children: [
+          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            ...fields,
+            if (sec.photo && (_photos[_secKey(sec)] ?? const []).isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('${sec.title} 사진', style: const TextStyle(fontSize: 12, color: _teal, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 4),
+                  _thumbs(_secKey(sec)),
+                ]),
+              ),
+          ]),
+          if (hasBtns)
+            Positioned(
+              top: 0,
+              right: 0,
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                if (sec.photo) _photoBtns(_secKey(sec), _secLabel(sec), compact: true),
+              ]),
+            ),
+        ]),
       ]),
     );
   }

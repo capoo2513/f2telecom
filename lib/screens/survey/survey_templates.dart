@@ -342,7 +342,8 @@ const tplFloor5G = SurveyTemplate(
   tech: '5G',
   rack: '신규랙(증설)',
   sections: [
-    _rack, _rectifier5GFloor, _ipd, _battery5G, _cooler, _halon, _backhaul, _etc,
+    // 5G 는 냉방기·하론 불필요 (2026-10-27)
+    _rack, _rectifier5GFloor, _ipd, _battery5G, _backhaul, _etc,
   ],
   checks: [
     _cBackhaulCore, _cDuCore, _cPower, _cBlank, _cSfp, _cVent, _cSubrack,
@@ -365,7 +366,8 @@ const tplPower5G = SurveyTemplate(
   tech: '5G',
   rack: '기존랙',
   sections: [
-    _rectifier5GPower, _ipd, _battery5G, _cooler, _halon, _backhaul, _etc,
+    // 5G 는 냉방기·하론 불필요 (2026-10-27)
+    _rectifier5GPower, _ipd, _battery5G, _backhaul, _etc,
   ],
   checks: [
     _cBackhaulCore, _cDuCore, _cBlank, _cSfp,

@@ -12,6 +12,10 @@ Option Explicit
 '  가져오기(열 때)    : 앱에서 입력/수정한 국사정보(floorBy = "app")만 받아서 F열에 채움
 '                       내용이 바뀐 F칸은 빨간 글씨로 표시
 '                       통합국 시트에 없는 중심국이면 맨 아래에 새 줄로 추가 (빨간 글씨)
+'                       가져온 것은 floorBy = "excel" 로 바꿔둠 (같은 것을 다시 가져오지 않음)
+'  지우기(저장할 때)  : 통합국 시트에서 지우거나 이름을 바꾼 중심국은 Firebase 에서도 지움
+'                       (앱에서 새로 넣고 아직 엑셀로 안 가져온 것은 남김 → 다음에 열 때 가져옴)
+'  수동 정리          : Alt+F8 → 통합국_Firebase정리 → 시트에 없는 중심국을 앱 추가분까지 모두 지움
 '
 '  ※ PROJECT_ID, SendToFirestore, HttpGetNoCache, CleanText 는 Module2,
 '    SetAuthHeader 는 mod_FirebaseAuth 에 있는 것을 그대로 사용
@@ -70,9 +74,111 @@ Public Sub SyncCenterData()
     If writes <> "" Then
         If Not CommitWrites(writes) Then Exit Sub
     End If
-    If cnt > 0 Then SaveSyncMemo memo
-    Application.StatusBar = "통합국 " & cnt & "줄 보냄"
+    ' 시트에서 없어진 중심국: 기억장소에서 빼고 Firebase 에서도 지움
+    Dim names As Object, k As Variant, removed As Boolean, delCnt As Long, delList As String
+    Set names = SheetNames(ws)
+    For Each k In memo.Keys
+        If Left(k, 2) = "C|" Then
+            If Not names.Exists(Mid(k, 3)) Then memo.Remove k: removed = True
+        End If
+    Next k
+    If cnt > 0 Or removed Then SaveSyncMemo memo
+    delCnt = DeleteMissingCenters(False, delList)
+    Application.StatusBar = "통합국 " & cnt & "줄 보냄" & IIf(delCnt > 0, ", " & delCnt & "개 지움", "")
 End Sub
+
+' ------------------------------------------------------------
+' [수동 정리] 통합국 시트에 없는 중심국을 Firebase 에서 모두 지움 (앱에서 넣은 것 포함)
+'   Alt+F8 → 통합국_Firebase정리 실행
+' ------------------------------------------------------------
+Public Sub 통합국_Firebase정리()
+    Dim n As Long, lst As String
+    If MsgBox("통합국 시트(E열)에 없는 중심국을 앱(Firebase)에서 모두 지웁니다." & vbCrLf & _
+              "앱에서 새로 입력하고 아직 엑셀로 가져오지 않은 중심국도 지워집니다." & vbCrLf & vbCrLf & "계속할까요?", _
+              vbYesNo + vbExclamation, "통합국 정리") <> vbYes Then Exit Sub
+    n = DeleteMissingCenters(True, lst)
+    If n < 0 Then
+        MsgBox "정리하지 못했습니다. (인터넷/로그인 확인, 또는 통합국 시트가 비어 있음)", vbExclamation, "통합국 정리"
+    ElseIf n = 0 Then
+        MsgBox "지울 중심국이 없습니다.", vbInformation, "통합국 정리"
+    Else
+        MsgBox n & "개를 지웠습니다." & vbCrLf & vbCrLf & lst, vbInformation, "통합국 정리"
+    End If
+End Sub
+
+' 통합국 시트 E열 중심국명 목록
+Private Function SheetNames(ws As Worksheet) As Object
+    Dim d As Object, r As Long, lastRow As Long, nm As String
+    Set d = CreateObject("Scripting.Dictionary")
+    lastRow = ws.Cells(ws.Rows.Count, "E").End(xlUp).Row
+    For r = FIRST_ROW To lastRow
+        nm = CleanText(ws.Cells(r, "E").Value)
+        If nm <> "" Then d(nm) = True
+        nm = Trim(CStr(ws.Cells(r, "E").Value))
+        If nm <> "" Then d(nm) = True
+    Next r
+    Set SheetNames = d
+End Function
+
+' Firebase 중심국 중 시트에 없는 것을 지움. 반환: 지운 개수 (-1 = 실패), lst = 지운 이름들
+'   allApp = False : 앱에서 넣고 아직 엑셀로 안 가져온 것(floorBy = app)은 남김
+Private Function DeleteMissingCenters(allApp As Boolean, ByRef lst As String) As Long
+    Dim ws As Worksheet, names As Object, http As Object, url As String, body As String
+    Dim res As Object, it As Variant, f As Object, nm As String, fb As String
+    Dim writes As String, n As Long, part As Long
+
+    DeleteMissingCenters = -1
+    On Error Resume Next
+    Set ws = ThisWorkbook.Sheets(SHEET_NAME)
+    On Error GoTo 0
+    If ws Is Nothing Then Exit Function
+    Set names = SheetNames(ws)
+    If names.Count < 10 Then Exit Function   ' 시트가 비어 보이면 실수로 다 지우지 않게 중단
+
+    url = "https://firestore.googleapis.com/v1/projects/" & PROJECT_ID & "/databases/(default)/documents:runQuery"
+    body = "{""structuredQuery"":{""from"":[{""collectionId"":""CenterData""}]," & _
+           """select"":{""fields"":[{""fieldPath"":""name""},{""fieldPath"":""floorBy""}]}}}"
+    Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
+    On Error Resume Next
+    http.Open "POST", url, False
+    http.setRequestHeader "Content-Type", "application/json"
+    SetAuthHeader http
+    http.send body
+    If Err.Number <> 0 Then Exit Function
+    On Error GoTo 0
+    If http.Status <> 200 Then Exit Function
+
+    On Error Resume Next
+    Set res = JsonConverter.ParseJson(http.responseText)
+    On Error GoTo 0
+    If res Is Nothing Then Exit Function
+
+    lst = ""
+    For Each it In res
+        If it.Exists("document") Then
+            nm = "": fb = ""
+            If it("document").Exists("fields") Then
+                Set f = it("document")("fields")
+                If f.Exists("name") Then nm = Trim(f("name")("stringValue"))
+                If f.Exists("floorBy") Then fb = f("floorBy")("stringValue")
+            End If
+            If nm <> "" And Not names.Exists(nm) And (allApp Or fb <> "app") Then
+                If writes <> "" Then writes = writes & ","
+                writes = writes & "{""delete"":""" & it("document")("name") & """}"
+                lst = lst & nm & vbCrLf
+                n = n + 1: part = part + 1
+                If part = 400 Then
+                    If Not CommitWrites(writes) Then Exit Function
+                    writes = "": part = 0
+                End If
+            End If
+        End If
+    Next it
+    If writes <> "" Then
+        If Not CommitWrites(writes) Then Exit Function
+    End If
+    DeleteMissingCenters = n
+End Function
 
 ' ------------------------------------------------------------
 ' [가져오기] 앱에서 넣은 국사정보만 F열로
@@ -81,7 +187,7 @@ Public Sub 폰데이터가져오기_통합국()
     Dim ws As Worksheet, http As Object, url As String, body As String
     Dim res As Object, it As Variant, f As Object
     Dim nm As String, fl As String, r As Long, lastRow As Long, found As Boolean
-    Dim got As Long, added As Long
+    Dim got As Long, added As Long, acks As String
 
     On Error Resume Next
     Set ws = ThisWorkbook.Sheets(SHEET_NAME)
@@ -141,9 +247,14 @@ Public Sub 폰데이터가져오기_통합국()
                     ws.Range(ws.Cells(lastRow, "B"), ws.Cells(lastRow, "F")).Font.Color = vbRed   ' 새로 추가된 줄도 빨간 글씨
                     added = added + 1
                 End If
+                ' 가져온 것은 floorBy = excel 로 (다시 안 가져오고, 시트에서 지우면 저장할 때 Firebase 에서도 지워지도록)
+                If acks <> "" Then acks = acks & ","
+                acks = acks & "{""update"":{""name"":""" & it("document")("name") & """,""fields"":{""floorBy"":{""stringValue"":""excel""}}}," & _
+                              """updateMask"":{""fieldPaths"":[""floorBy""]}}"
             End If
         End If
     Next it
+    If acks <> "" Then CommitWrites acks
     Application.StatusBar = "통합국 국사정보 " & got & "건 반영, " & added & "건 새로 추가"
     Exit Sub
 Fail:

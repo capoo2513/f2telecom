@@ -124,7 +124,6 @@ List<GTemplate> gaetongTemplates() {
         GItem('신규광공유모듈', type: 'module', opts: moda, id: 'newMod'),
         optCarrier(after),
       ]);
-  GItem waterproof() => choice('방수관', ['1EA', '2EA', '3EA', '4EA']);
   GItem sticker() => choice('무선국스티커부착여부', ['완료', '미완료']);
   GItem ringmux() => GItem('링먹스', opt: true);
   GItem note() => memo('특이사항', id: 'note', opt: true);
@@ -154,7 +153,7 @@ List<GTemplate> gaetongTemplates() {
         optBox(after: 'mux'),
         GSection('개통 $unit', [GItem('개통 장비', type: 'units', noLabel: true)]),
         GSection('MUX · SFP', [mux('mother'), GItem('SFP', type: 'sfpU')]),
-        GSection('방수관 · 알람케이블', [waterproof(), GItem('알람케이블', type: 'alarmU')]),
+        GSection('방수관 · 알람케이블', [choice('방수관', ['1EA', '2EA', '3EA', '4EA', '미사용']), GItem('알람케이블', type: 'alarmU')]),
         GSection('연동현황', [GItem('연동현황', type: 'link', noLabel: true)]),
         GSection('5G 케이블', [GItem('5G 케이블', type: 'cableU', noLabel: true)]),
         GSection('스티커 · 특이사항', [sticker(), note()]),
@@ -181,7 +180,8 @@ List<GTemplate> gaetongTemplates() {
     basic(),
     optBox(),
     GSection('장비', [GItem('SFP', type: 'sfpMulti', opts: ['35L/H', '59L/H', '27/41', '850'])]),
-    GSection('방수관 · 알람케이블', [waterproof(), GItem('알람케이블', type: 'alarm1')]),
+    // RRU: 방수관 '미사용' / 알람케이블 '기존활용' 도 고를 수 있음 (고르면 입력 완료)
+    GSection('방수관 · 알람케이블', [choice('방수관', ['1EA', '2EA', '3EA', '4EA', '미사용']), GItem('알람케이블', type: 'alarm1')]),
     GSection('정류기 연동현황',
         [GItem('정류기 연동현황', type: 'link', inline: true, noLabel: true, msOpts: ['800', '1.8', '2.1', '2.6'])]),
     GSection('스티커 · 특이사항', [sticker(), ringmux(), note()]),
@@ -404,6 +404,8 @@ class GaetongModel {
   }
 
   String alarm1Fmt(String key) {
+    if (v('$key.ex').isNotEmpty) return '기존활용';
+    if (v('$key.nu').isNotEmpty) return '미사용';
     if (v('$key.o').isNotEmpty) return v('$key.etc');
     final l = v('$key.len');
     return l.isNotEmpty ? '${l}M×${v('$key.q').isEmpty ? '1' : v('$key.q')}EA' : '';
@@ -441,10 +443,18 @@ class GaetongModel {
     return l.isNotEmpty ? '${l}M×1EA' : '';
   }
 
+  /// 알람케이블을 쓰는 장비 번호 (개통 장비 중에서 고름)
+  List<int> alarmUnits(String key) {
+    final sel = val('$key.sel').split(',').where((x) => x.isNotEmpty).map(int.parse).toSet();
+    return units().where(sel.contains).toList();
+  }
+
+  bool alarmNone(String key) => v('$key.none').isNotEmpty;
+
   String alarmSum(String key) {
     final tally = <String, int>{};
     var fac = false;
-    for (final n in units()) {
+    for (final n in alarmUnits(key)) {
       if (v('$key.$n.fac').isNotEmpty) {
         fac = true;
         continue;
@@ -621,19 +631,21 @@ class GaetongModel {
     if (u != null && u.fixed) return '(파) 2C LC/PC-LC/PC';
     final d = (u != null && u.rdef && !ignoreRdef && v('${p}custom').isEmpty)
         ? remoteDef()
-        : {'c': v('${p}c'), 'a': v('${p}a'), 'ap': v('${p}ap'), 'b': v('${p}b'), 'bp': v('${p}bp')};
+        : {'c': v('${p}c'), 'n': v('${p}n'), 'a': v('${p}a'), 'ap': v('${p}ap'), 'b': v('${p}b'), 'bp': v('${p}bp')};
     final a = matEnd(d['a']!, d['ap']!), b = matEnd(d['b']!, d['bp']!);
-    return [colorFmt(d['c']!), a.isNotEmpty && b.isNotEmpty ? '$a-$b' : (a.isNotEmpty ? a : b)].where((x) => x.isNotEmpty).join(' ');
+    // n: 심선 수 (예: 2C)
+    return [colorFmt(d['c']!), d['n'] ?? '', a.isNotEmpty && b.isNotEmpty ? '$a-$b' : (a.isNotEmpty ? a : b)].where((x) => x.isNotEmpty).join(' ');
   }
 
   List<Usage> matUsages(GItem it) {
-    Map<String, String> d(String c, String a, String ap, String b, String bp) => {'c': c, 'a': a, 'ap': ap, 'b': b, 'bp': bp};
+    Map<String, String> d(String c, String a, String ap, String b, String bp, [String n = '']) =>
+        {'c': c, 'a': a, 'ap': ap, 'b': b, 'bp': bp, if (n.isNotEmpty) 'n': n};
     const etc = Usage('etc', '기타 (직접 입력)');
     if (it.remote) {
       if (tpl.tech == '4G') {
         final rr = tpl.eq == 'RRU'
             ? [
-                const Usage('ijp', 'IJP ~ RRU', rdef: true),
+                Usage('ijp', 'IJP ~ RRU', def: d('외', 'SC', '', 'LC', 'PC')),
                 Usage('rru2mux', 'RRU ~ MUX', def: d('외', 'LC', 'PC', 'LC', 'APC')),
                 Usage('rru2ocm', 'RRU ~ OCM', def: d('외', 'FC', '', 'LC', 'PC')),
                 Usage('ocm2ijp', 'OCM ~ IJP', def: d('외', 'SC', '', 'FC', '')),
@@ -654,9 +666,10 @@ class GaetongModel {
       Map<String, String> y(String b, [String bp = '']) => d('노', 'SC', '', b, bp);
       final l4 = tpl.eq == 'MIBOS'
           ? [
-              Usage('du2l9', 'DU ~ L9TU', grp: 'L9TU', fl: 1, qty: true, def: y('LC', 'PC')),
+              // DU~L9TU 만 주황 2C
+              Usage('du2l9', 'DU ~ L9TU', grp: 'L9TU', fl: 1, qty: true, def: d('주', 'LC', 'PC', 'LC', 'PC', '2C')),
               Usage('du2fdf', 'DU ~ 층간FDF', grp: 'L9TU', fl: 1, qty: true, def: y('LC', 'PC')),
-              Usage('fdf2l9', '층간FDF ~ L9TU', grp: 'L9TU', fl: 0, qty: true, def: y('LC', 'PC')),
+              Usage('fdf2l9', '층간FDF ~ L9TU', grp: 'L9TU', fl: 0, qty: true, def: y('LC', 'APC')),
               Usage('mhs2ofd', 'MHS ~ 사업자OFD', grp: 'MHS', fl: 0, def: y('FC')),
               Usage('mhs2fdf', 'MHS ~ 층간FDF', grp: 'MHS', fl: 0, def: y('FC')),
               Usage('fdf2ofd', '층간FDF ~ 사업자OFD', grp: 'MHS', fl: 3, def: y('SC')),
@@ -707,7 +720,7 @@ class GaetongModel {
       // 자재 수량 기본 1 (중심국·리모트 공통)
       if (v('${p}q').isEmpty) o['${p}q'] = '1';
     } else if (id.startsWith('etc')) {
-      for (final s in ['ut', 'edit', 'custom', 'c', 'a', 'ap', 'b', 'bp', 'len', 'q', 'r']) {
+      for (final s in ['ut', 'edit', 'custom', 'kind', 'c', 'n', 'a', 'ap', 'b', 'bp', 'len', 'q', 'r']) {
         o['$key.$id.$s'] = '';
       }
     }
@@ -725,8 +738,17 @@ class GaetongModel {
     return u.label.replaceAll(RegExp(r'\s*~\s*'), '~') + (f.isNotEmpty ? '_$f' : '');
   }
 
+  /// 기타 자재 중 길이·실거리·타입이 필요 없는 정해진 자재 (4G RRU 리모트)
+  List<String> etcKinds(GItem it) => (it.remote && tpl.eq == 'RRU') ? const ['2.6G용 OJC', '800전용OJP'] : const [];
+  String etcKind(MatEntry en) => en.uid == 'etc' ? v('${en.p}kind') : '';
+
   String matLine(GItem it, MatEntry en) {
     final p = en.p;
+    final kind = etcKind(en);
+    if (kind.isNotEmpty) {
+      final q = v('${p}q'), use = v('${p}ut');
+      return '$kind×${q.isEmpty ? '1' : q}EA${use.isNotEmpty ? ' [$use]' : ''}';
+    }
     final u = usageOf(it, en.uid);
     final head = u != null ? matHead(p, u) : '';
     final len = v('${p}len'), q = v('${p}q'), r = v('${p}r'), use = matUsage(it, p, en.uid);
@@ -741,6 +763,7 @@ class GaetongModel {
 
   /// 자재 하나 완료: 타입·길이·실거리·사용처 문구가 다 있어야 (수량은 기본 1)
   bool matEntryDone(GItem it, MatEntry en) {
+    if (etcKind(en).isNotEmpty) return true;
     final u = usageOf(it, en.uid);
     if (u == null) return false;
     return matHead(en.p, u).isNotEmpty && v('${en.p}len').isNotEmpty && v('${en.p}r').isNotEmpty && matUsage(it, en.p, en.uid).isNotEmpty;
@@ -769,7 +792,7 @@ class GaetongModel {
     final mx = itemOf(sunIt.sunFrom ?? '');
     if (mx == null) return null;
     // LS판넬~DS판넬은 선번 필요 없음
-    return (it: mx.it, key: mx.key, entries: matEntries(mx.it, mx.key).where((en) => en.uid != 'ls').toList());
+    return (it: mx.it, key: mx.key, entries: matEntries(mx.it, mx.key).where((en) => en.uid != 'ls' && etcKind(en).isEmpty).toList());
   }
 
   List<String> sunLines(GItem sunIt, String key) {
@@ -903,7 +926,8 @@ class GaetongModel {
       case 'sfpU':
         return [for (final n in us) ...kv('SFP ${u}_$n', sfpVal(key, n))];
       case 'alarmU':
-        return [...kv('알람케이블', alarmSum(key)), for (final n in us) ...kv('${u}_$n', alarmVal(key, n))];
+        if (alarmNone(key)) return kv('알람케이블', '미사용');
+        return [...kv('알람케이블', alarmSum(key)), for (final n in alarmUnits(key)) ...kv('${u}_$n', alarmVal(key, n))];
       case 'cableU':
         return head('5G 케이블', [for (final n in us) ...kv('${u}_$n', cableVal(key, n))]);
       case 'link':
@@ -980,8 +1004,12 @@ class GaetongModel {
         return muxFmt(key).isNotEmpty;
       case 'sfpU':
         return us.every((n) => sfpVal(key, n).isNotEmpty);
-      case 'alarmU':
-        return us.every((n) => alarmVal(key, n).isNotEmpty);
+      case 'alarmU': {
+        // 미사용, 또는 고른 장비마다 길이/시설팀 포설
+        if (alarmNone(key)) return true;
+        final au = alarmUnits(key);
+        return au.isNotEmpty && au.every((n) => alarmVal(key, n).isNotEmpty);
+      }
       case 'cableU':
         return us.every((n) => cableVal(key, n).isNotEmpty);
       case 'link':

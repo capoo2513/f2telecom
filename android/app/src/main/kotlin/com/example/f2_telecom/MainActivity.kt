@@ -1,5 +1,6 @@
 package com.example.f2_telecom
 
+import android.app.Activity
 import android.content.ClipData
 import android.content.ContentValues
 import android.content.Intent
@@ -13,8 +14,10 @@ import android.graphics.Paint
 import android.graphics.Typeface
 import android.media.AudioAttributes
 import android.media.ExifInterface
-import android.media.MediaActionSound
 import android.media.MediaScannerConnection
+import android.media.SoundPool
+import android.media.AudioManager
+import android.media.ToneGenerator
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -22,6 +25,7 @@ import android.os.VibrationAttributes
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.provider.DocumentsContract
 import android.provider.MediaStore
 import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterFragmentActivity
@@ -36,6 +40,9 @@ class MainActivity : FlutterFragmentActivity() {
     private val bandChannel = "f2telecom/band"
     private val bandPackage = "com.nhn.android.band"
     private val cameraChannel = "f2telecom/camera"
+    private val pickerChannel = "f2telecom/picker"
+    private val pickShotsCode = 7301
+    private var pickShotsResult: MethodChannel.Result? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -97,7 +104,25 @@ class MainActivity : FlutterFragmentActivity() {
                 }
             }
 
-        // [실사] 촬영 시 찰칵 소리 + 진동
+        // [개통] 센싱: 휴대폰 스크린샷 폴더(DCIM/Screenshots)를 바로 열어 여러 장 선택
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, pickerChannel)
+            .setMethodCallHandler { call, result ->
+                if (call.method == "pickScreenshots") {
+                    pickShotsResult?.success(null) // 이전 요청이 남아 있으면 정리
+                    pickShotsResult = result
+                    try {
+                        startActivityForResult(screenshotIntent(), pickShotsCode)
+                    } catch (e: Exception) {
+                        pickShotsResult = null
+                        result.error("PICK", e.message, null)
+                    }
+                } else {
+                    result.notImplemented()
+                }
+            }
+
+        // [실사] 촬영 시 찰칵 소리 + 진동 (소리 파일 미리 준비)
+        try { quietPool.hashCode() } catch (e: Throwable) { }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, cameraChannel)
             .setMethodCallHandler { call, result ->
                 if (call.method == "shutter") {
@@ -108,15 +133,43 @@ class MainActivity : FlutterFragmentActivity() {
             }
     }
 
-    private val shutterSound: MediaActionSound by lazy {
-        MediaActionSound().apply { load(MediaActionSound.SHUTTER_CLICK) }
+    // 찰칵 소리: 휴대폰 기본 셔터 소리 파일을 작게(볼륨 25%) 재생 — 진동이 있어서 소리는 작게
+    private val shutterVolume = 0.25f
+    private var quietId = 0
+    private var quietReady = false
+    private val quietPool: SoundPool by lazy {
+        SoundPool.Builder()
+            .setMaxStreams(1)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build()
+            )
+            .build().apply {
+                setOnLoadCompleteListener { _, _, status -> quietReady = status == 0 }
+                val f = listOf(
+                    "/system/media/audio/ui/camera_click.ogg",
+                    "/system/media/audio/ui/Shutter.ogg",
+                    "/product/media/audio/ui/camera_click.ogg"
+                ).map { File(it) }.firstOrNull { it.exists() }
+                if (f != null) quietId = load(f.absolutePath, 1)
+            }
     }
 
     /// 찰칵 소리 + 진동. 반환: "ok" 또는 실패 이유(진단용)
     private fun playShutterFeedback(): String {
         val problems = ArrayList<String>()
         try {
-            shutterSound.play(MediaActionSound.SHUTTER_CLICK)
+            val pool = quietPool
+            if (quietId != 0 && quietReady) {
+                pool.play(quietId, shutterVolume, shutterVolume, 1, 0, 1f)
+            } else {
+                // 셔터 소리 파일이 없는 휴대폰: 작은 '삑' 소리로 대신
+                val tone = ToneGenerator(AudioManager.STREAM_SYSTEM, 30)
+                tone.startTone(ToneGenerator.TONE_PROP_BEEP, 60)
+                android.os.Handler(mainLooper).postDelayed({ tone.release() }, 200)
+            }
         } catch (e: Throwable) {
             problems.add("소리: ${e.javaClass.simpleName} ${e.message}")
         }
@@ -216,6 +269,65 @@ class MainActivity : FlutterFragmentActivity() {
         if (bmp !== decoded) decoded.recycle()
         if (rotated !== decoded && rotated !== bmp) rotated.recycle()
         bmp.recycle()
+    }
+
+    /// 파일 선택 창을 스크린샷 폴더에서 시작 (삼성: DCIM/Screenshots, 그 외: Pictures/Screenshots)
+    private fun screenshotIntent(): Intent {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "image/*"
+            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            @Suppress("DEPRECATION")
+            val root = Environment.getExternalStorageDirectory()
+            val rel = if (File(root, "DCIM/Screenshots").exists() || !File(root, "Pictures/Screenshots").exists())
+                "DCIM/Screenshots" else "Pictures/Screenshots"
+            val uri = DocumentsContract.buildDocumentUri(
+                "com.android.externalstorage.documents", "primary:$rel"
+            )
+            intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, uri)
+        }
+        return intent
+    }
+
+    @Deprecated("FlutterFragmentActivity 결과 전달용")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode != pickShotsCode) {
+            @Suppress("DEPRECATION")
+            super.onActivityResult(requestCode, resultCode, data)
+            return
+        }
+        val result = pickShotsResult ?: return
+        pickShotsResult = null
+        if (resultCode != Activity.RESULT_OK || data == null) {
+            result.success(emptyList<String>())
+            return
+        }
+        val uris = ArrayList<Uri>()
+        val clip = data.clipData
+        if (clip != null) {
+            for (i in 0 until clip.itemCount) uris.add(clip.getItemAt(i).uri)
+        } else {
+            data.data?.let { uris.add(it) }
+        }
+        // 고른 사진을 앱 임시 폴더로 복사해서 경로를 돌려줌 (앱이 계속 쓸 수 있게)
+        Thread {
+            val out = ArrayList<String>()
+            val dir = File(cacheDir, "pick_shots").apply { mkdirs() }
+            uris.forEachIndexed { i, u ->
+                try {
+                    val dst = File(dir, "shot_" + System.currentTimeMillis() + "_" + i + ".jpg")
+                    contentResolver.openInputStream(u)?.use { input ->
+                        FileOutputStream(dst).use { input.copyTo(it) }
+                    }
+                    if (dst.exists() && dst.length() > 0) out.add(dst.absolutePath)
+                } catch (e: Exception) {
+                    // 못 읽은 사진은 건너뜀
+                }
+            }
+            runOnUiThread { result.success(out) }
+        }.start()
     }
 
     private fun isBandInstalled(): Boolean {
