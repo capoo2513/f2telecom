@@ -259,17 +259,25 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                     child: const Text("취소")),
                 ElevatedButton(
                   onPressed: () async {
-                    // 저장 로직
-                    await FirebaseFirestore.instance
-                        .collection('users')
-                        .doc(docId)
-                        .update({
-                      'access_scores': tempScores,
-                      'isApproved': true, // 권한 설정하면 자동 승인
-                      // 기존 role 필드도 호환성을 위해 업데이트 (관리자 권한 있으면 admin)
-                      'role': (tempScores['admin'] == 3) ? 'admin' : 'user',
-                    });
-                    if (mounted) Navigator.pop(ctx);
+                    // 저장 로직 (성공/실패를 꼭 알려줌 — 예전엔 실패해도 조용히 닫혔음)
+                    final messenger = ScaffoldMessenger.of(this.context);
+                    try {
+                      await FirebaseFirestore.instance
+                          .collection('users')
+                          .doc(docId)
+                          .update({
+                        'access_scores': tempScores,
+                        'isApproved': true, // 권한 설정하면 자동 승인
+                        // 기존 role 필드도 호환성을 위해 업데이트 (관리자 권한 있으면 admin)
+                        'role': (tempScores['admin'] == 3) ? 'admin' : 'user',
+                      });
+                      if (ctx.mounted) Navigator.pop(ctx);
+                      messenger.showSnackBar(
+                          SnackBar(content: Text('$name 님 권한을 저장했습니다.')));
+                    } catch (e) {
+                      messenger.showSnackBar(
+                          SnackBar(content: Text('권한 저장 실패: $e')));
+                    }
                   },
                   child: const Text("저장 및 승인"),
                 ),

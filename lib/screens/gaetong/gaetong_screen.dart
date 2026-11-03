@@ -21,7 +21,7 @@ const _sub = Color(0xFF5F6473);
 const _teal = Color(0xFF00695C);
 const _doneBg = Color(0xFFE3E6EB);
 const _doneBorder = Color(0xFFD0D4DC);
-const _buildMark = '개통 빌드 2026-10-27 #16';
+const _buildMark = '개통 빌드 2026-10-28 #23';
 const _sensingKey = 'sensing'; // 센싱 사진 (갤러리에서 여러 장, 글자 안 새김, 밴드에 맨 먼저)
 
 void _toast(BuildContext context, String msg) {
@@ -226,8 +226,8 @@ class _GaetongStartScreenState extends State<GaetongStartScreen> {
           border: Border.all(color: sel ? _indigo : const Color(0xFFD5D8E2), width: sel ? 2 : 1),
         ),
         child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-          Text(t.tech, style: TextStyle(fontSize: 12, color: sel ? Colors.white70 : _sub)),
-          Text(t.eq, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: sel ? Colors.white : _ink)),
+          Text(t.btnSmall ?? t.tech, style: TextStyle(fontSize: 12, color: sel ? Colors.white70 : _sub)),
+          Text(t.btnBig ?? t.eq, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: sel ? Colors.white : _ink)),
         ]),
       ),
     );
@@ -237,9 +237,13 @@ class _GaetongStartScreenState extends State<GaetongStartScreen> {
   Widget build(BuildContext context) {
     final five = [for (var i = 0; i < _templates.length; i++) if (_templates[i].tech == '5G') i];
     final four = [for (var i = 0; i < _templates.length; i++) if (_templates[i].tech == '4G') i];
+    final dus = [for (var i = 0; i < _templates.length; i++) if (_templates[i].tech == 'DU') i];
+    // padding 0: 기본값이면 화면 위·아래 여백(상태바·내비바 높이)이 그리드마다 붙어 간격이 크게 벌어짐
     Widget grid(List<int> idx) => GridView.count(
           crossAxisCount: 3,
           shrinkWrap: true,
+          primary: false,
+          padding: EdgeInsets.zero,
           physics: const NeverScrollableScrollPhysics(),
           mainAxisSpacing: 8,
           crossAxisSpacing: 8,
@@ -374,6 +378,10 @@ class _GaetongStartScreenState extends State<GaetongStartScreen> {
           const Text('4G', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFFBF360C))),
           const SizedBox(height: 6),
           grid(four),
+          const SizedBox(height: 14),
+          const Text('DU', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: _teal)),
+          const SizedBox(height: 6),
+          grid(dus),
           if (_tpl >= 0)
             Container(
               margin: const EdgeInsets.only(top: 14),
@@ -538,7 +546,8 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
   /// 사진 자리 (화면 순서): 키, 사진 위에 새길 글자 ('' 이면 안 새김)
   List<(String, String)> _photoSlots() {
     // 센싱 사진은 밴드에 본문 다음 맨 먼저 (사진 위 글자 없음)
-    final out = <(String, String)>[(_sensingKey, '')];
+    // DU 는 센싱 없음
+    final out = <(String, String)>[if (widget.tpl.tech != 'DU') (_sensingKey, '')];
     for (var si = 0; si < widget.tpl.sections.length; si++) {
       final sec = widget.tpl.sections[si];
       if (sec.photo) out.add((_secKey(sec), _secLabel(sec)));
@@ -553,7 +562,11 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
             final src = m.sunSource(x.it);
             if (src == null) break;
             for (final en in src.entries) {
-              out.add(('${x.key}.${en.id}', _sunStamp(x.it, m.sunLabel(src.it, en))));
+              final lab = m.sunLabel(src.it, en);
+              final slots = m.sunSlots(src.it, en, x.key);
+              for (final sl in slots) {
+                out.add((sl.$2, _sunStamp(x.it, slots.length > 1 ? '$lab (${sl.$1})' : lab)));
+              }
             }
             break;
           }
@@ -717,7 +730,7 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
     ]);
   }
 
-  // 센싱: 사진 칸 맨 위 (현장 사진 위) · 갤러리 버튼만 · 스크린샷 폴더가 바로 열림
+  // 센싱: 사진 칸 맨 위 (현장 사진 위) · 갤러리 버튼만 (다른 갤러리 버튼과 같은 화면)
   //   사진 위 글자 없음, 밴드에는 본문 다음 맨 먼저
   Widget _sensingBox() {
     final list = _photos[_sensingKey] ?? const <String>[];
@@ -732,7 +745,7 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
           if (list.isNotEmpty)
             Text('${list.length}장', style: const TextStyle(fontSize: 12, color: Color(0xFF2E7D32), fontWeight: FontWeight.bold)),
           IconButton(
-            tooltip: '스크린샷에서 선택',
+            tooltip: '갤러리에서 선택',
             icon: const Icon(Icons.photo_library_outlined, color: _indigo),
             onPressed: _pickSensing,
           ),
@@ -744,7 +757,7 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
 
   Future<void> _pickSensing() async {
     try {
-      final paths = await SurveyPhotoService.pickScreenshots(m.names.isNotEmpty ? m.names.first : widget.station);
+      final paths = await SurveyPhotoService.pickFromGallery(m.names.isNotEmpty ? m.names.first : widget.station);
       if (paths.isEmpty || !mounted) return;
       (_photos[_sensingKey] ??= []).addAll(paths);
       _changed();
@@ -921,6 +934,88 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
     List<String> nums(int a, int b) => [for (var i = a; i <= b; i++) '$i'];
 
     switch (it.type) {
+      case 'bldg': {
+        // 건물 전체층 / 설치층 : 층 버튼 + 기타 직접 입력
+        Widget floors(String s, String title, List<String> opts) {
+          final k = '$key.$s', cur = m.v(k);
+          return _row([
+            for (final op in opts) _chip(op, cur == op, () => m.setVals({k: cur == op ? '' : op, '${k}e': ''})),
+            if (cur == '기타') ...[_inp('${k}e', '예: 15', width: 70, numeric: true), _txt('층')],
+          ], title: title, done: cur.isNotEmpty);
+        }
+
+        rf.rows.add(floors('all', '건물 전체층', ['1층', '2층', '3층', '4층', '5층', '기타']));
+        rf.rows.add(floors('at', '설치층', ['B1층', '1층', '2층', '3층', '4층', '5층', '기타']));
+        rf.preview = m.out(it, key).join('\n');
+        break;
+      }
+
+      case 'qtyNu': {
+        final nu = m.v('$key.nu').isNotEmpty;
+        rf.rows.add(_row([
+          if (!nu) ...[
+            _inp(key, '수량', width: 64, numeric: true, display: m.val(key).replaceAll(RegExp(r'EA$', caseSensitive: false), '')),
+            _txt('EA'),
+          ],
+          _chip('미사용', nu, () => m.setVals({'$key.nu': nu ? '' : '1', key: ''})),
+        ]));
+        break;
+      }
+
+      case 'duMats': {
+        // 사용 자재를 먼저 고르면 고른 것마다 입력칸 (수량 기본 1, 구간 기본 문구 자동)
+        final presets = m.duPresets(), sel = m.duSel(key);
+        final top = <Widget>[_txt('자재 선택 (여러 개)', 'head'), _br()];
+        for (var i = 0; i < presets.length; i++) {
+          final id = 'p$i', on = sel.contains(id);
+          top.add(_chip(presets[i].name, on, () => m.duToggle(key, id, !on)));
+        }
+        final etcs = sel.where((x) => x.startsWith('etc')).toList();
+        if (etcs.length < 8) {
+          final nx = etcs.fold<int>(0, (a, x) => (int.tryParse(x.substring(3)) ?? 0) > a ? int.parse(x.substring(3)) : a) + 1;
+          top.add(_chip('+ 기타', false, () => m.duToggle(key, 'etc$nx', true)));
+        }
+        rf.rows.add(_row(top));
+        var etcNo = 0;
+        for (final en in m.duEntries(key)) {
+          final p = en.p, pr = en.pr;
+          final nu = m.v('${p}nu').isNotEmpty;
+          Widget nuChip() => _chip('미사용', nu, () => m.setVal('${p}nu', nu ? '' : '1'));
+          final c = <Widget>[];
+          if (nu) {
+            c.add(nuChip());
+          } else {
+            if (pr == null) c.addAll([_inp('${p}nm', '자재 이름 (예: GPS 4WAY분배기)'), _br()]);
+            if (pr != null && pr.kinds.isNotEmpty) {
+              final k = m.v('${p}k');
+              for (final op in pr.kinds) {
+                c.add(_chip(op, k == op, () => m.setVals({'${p}k': k == op ? '' : op, '${p}sb': ''}), rect: true));
+              }
+              if (pr.nu) c.add(nuChip());
+              if (pr.subs.isNotEmpty && k.isNotEmpty) c.addAll([_br(), _txt(k, 'head'), ..._chipsFor('${p}sb', pr.subs[k] ?? const [])]);
+              c.add(_br());
+            } else if (pr != null && pr.nu) {
+              c.addAll([nuChip(), _br()]);
+            }
+            if (pr == null || pr.len) c.addAll([_inp('${p}len', '길이', width: 56, numeric: true), _txt('M')]);
+            c.addAll([_txt('×', 'head'), _inp('${p}q', '1', width: 48, numeric: true), _txt('EA')]);
+            if (pr != null && pr.real) c.addAll([_txt('실거리', 'head'), _inp('${p}r', '실거리', width: 60, numeric: true), _txt('M')]);
+            if (pr?.fixedSec != null) {
+              final fs = pr!.fixedSec!.replaceAll(RegExp(r'\s*~\s*'), '~');
+              c.add(_txt('[$fs]', 'hint'));
+            } else if (pr == null || pr.sec != null) {
+              c.addAll([_br(), _txt('구간', 'head'), _inp('${p}ut', '예: DU ~ DDF (비워도 됨)')]);
+            }
+          }
+          final title = pr == null ? '기타 ${++etcNo}' : pr.name;
+          rf.rows.add(_row(c, title: title, onRemove: () => m.duToggle(key, en.id, false), done: m.duEntryDone(en)));
+        }
+        if (sel.isEmpty) rf.rows.add(_txt('위에서 자재를 고르면 입력칸이 생겨요', 'hint'));
+        rf.note = '밴드에는 아래 특이사항 칸 내용과 함께 "특이사항&자재내역"으로 올라가요';
+        rf.preview = m.duLines(key).join('\n');
+        break;
+      }
+
       case 'chips': {
         final toks = m.v(key).split(RegExp(r'\s+')).where((x) => x.isNotEmpty).toList();
         rf.rows.add(_row([
@@ -1134,8 +1229,18 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
           _txt('_S-MUX#'), _inp(k('c'), '랙', width: 54, numeric: true), _br(),
           _txt('_Shelf'), _inp(k('d'), '셀프', width: 54, numeric: true), _txt('-'), _inp(k('e'), '슬롯', width: 54, numeric: true),
           _chip('(배면)', m.v(k('bk')).isNotEmpty, () => m.setVal(k('bk'), m.v(k('bk')).isNotEmpty ? '' : '1')),
+          _br(),
+          // 만들어 둔 셀프 위치 글을 붙여 넣는 칸 (넣으면 위 칸 대신 이 글이 올라감)
+          SizedBox(
+            width: double.infinity,
+            child: _SyncInput(
+                key: ValueKey('in:${k('txt')}'),
+                value: m.val(k('txt')),
+                hint: '또는 붙여넣기 (예: R7-5_S-MUX#3_Shelf6-2)',
+                onChanged: (s) => m.setVal(k('txt'), s)),
+          ),
         ]));
-        rf.note = 'R칸을 비우면 S-MUX#부터 표시돼요';
+        rf.note = m.v(k('txt')).isNotEmpty ? '붙여 넣은 글이 그대로 밴드에 올라가요' : 'R칸을 비우면 S-MUX#부터 표시돼요';
         rf.preview = m.muxFmt(key);
         break;
       }
@@ -1167,14 +1272,17 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
           rf.rows.add(_row([
             ccOn ? _txt('CC', 'badge') : (mod.isNotEmpty ? _txt(mod, 'badge') : _txt('광공유모듈을 먼저 선택', 'warn')),
             if (it.cc && n > 1) _chip('CC', ccOn, () => m.setVal(ck, ccOn ? '' : '1')),
-            ..._chipsFor('$key.$n.sp', ['10G', '25G']),
+            // 10G/25G: 첫 번째 장비에서 고른 것이 나머지에도 자동 (바꿀 수 있음)
+            for (final op in ['10G', '25G'])
+              _chip(op, m.sfpSp(key, n) == op, () => m.setVal('$key.$n.sp', m.v('$key.$n.sp') == op ? '' : op)),
             _br(),
             _txt('번호', 'head'),
             ...noChips(n),
-          ], title: 'SFP ${u}_$n', onRemove: unitRm(n), done: m.sfpVal(key, n).isNotEmpty));
+          ], title: 'SFP ${u}_$n', onRemove: unitRm(n), done: m.sfpDone(key, n)));
         }
         unitAdd();
-        if (it.cc && units.length > 1) rf.note = '2번부터 [CC]를 누르면 모듈 대신 CC로 표시돼요';
+        rf.note = '10G/25G와 번호를 둘 다 골라야 완료 · 첫 번째 장비의 10G/25G가 나머지에도 자동으로 들어가요';
+        if (it.cc && units.length > 1) rf.note += '\n2번부터 [CC]를 누르면 모듈 대신 CC로 표시돼요';
         rf.preview = m.out(it, key).join('\n');
         break;
       }
@@ -1284,16 +1392,37 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
         }
         for (final en in entries) {
           final lab = m.sunLabel(src!.it, en);
-          final k = '$key.${en.id}';
-          rf.rows.add(_row([
-            SizedBox(
-              width: double.infinity,
-              child: _SyncInput(key: ValueKey('in:$k'), value: m.val(k), hint: '예: R5-2_OFD#1(2F~3F)_S11_57P', onChanged: (s) => m.setVal(k, s)),
-            ),
-            if ((_photos[k] ?? const []).isNotEmpty) _thumbs(k),
-          ], title: lab, trailing: _photoBtns(k, _sunStamp(it, lab)), done: m.v(k).isNotEmpty));
+          final slots = m.sunSlots(src.it, en, key);
+          Widget input(String k) => SizedBox(
+                width: double.infinity,
+                child: _SyncInput(key: ValueKey('in:$k'), value: m.val(k), hint: '예: R5-2_OFD#1(2F~3F)_S11_57P', onChanged: (s) => m.setVal(k, s)),
+              );
+          if (slots.length == 1) {
+            final k = slots.first.$2;
+            rf.rows.add(_row([
+              input(k),
+              if ((_photos[k] ?? const []).isNotEmpty) _thumbs(k),
+            ], title: lab, trailing: _photoBtns(k, _sunStamp(it, lab)), done: m.v(k).isNotEmpty));
+          } else {
+            // 층간FDF~사업자OFD 처럼 양쪽 다 선번이 있으면 칸 2개 (각각 사진)
+            rf.rows.add(_row([
+              for (final sl in slots) ...[
+                SizedBox(
+                  width: double.infinity,
+                  child: Row(children: [
+                    Expanded(child: Text(sl.$1, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: _indigoDark))),
+                    _photoBtns(sl.$2, _sunStamp(it, '$lab (${sl.$1})'), compact: true),
+                  ]),
+                ),
+                input(sl.$2),
+                if ((_photos[sl.$2] ?? const []).isNotEmpty) _thumbs(sl.$2),
+              ],
+            ], title: lab, done: slots.every((sl) => m.v(sl.$2).isNotEmpty)));
+          }
         }
-        rf.note = '사진 위쪽에 사용처 이름이 새겨져요 (갤러리 저장본·밴드)';
+        rf.note = it.sunFrom == 'rmats'
+            ? '사진 위쪽에 사용처 이름이 새겨져요 (갤러리 저장본·밴드)'
+            : 'DU·MHS·MUX·판넬 쪽은 선번이 없어서 층간FDF·사업자OFD 쪽만 칸이 생겨요';
         rf.preview = m.sunLines(it, key).join('\n');
         break;
       }
@@ -1372,7 +1501,15 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
           _br(),
           _txt('색', 'head'),
           for (final x in colors) _chip(x[1], m.v('${p}c') == x[0], () => m.setVal('${p}c', m.v('${p}c') == x[0] ? '' : x[0])),
-          _chip('2C', m.v('${p}n') == '2C', () => m.setVal('${p}n', m.v('${p}n') == '2C' ? '' : '2C'), rect: true),
+          // 심선 수: 숫자 직접 입력 (예: 2 → 2C, 16 → 16C), 비우면 표시 안 함
+          _txt('심선', 'head'),
+          _inp('${p}n', '예: 2', width: 52, numeric: true,
+              display: m.v('${p}n').replaceAll(RegExp(r'[^0-9]'), ''),
+              onChanged: (s) {
+                final d = s.replaceAll(RegExp(r'[^0-9]'), '');
+                m.setVal('${p}n', d.isEmpty ? '' : '${d}C');
+              }),
+          _txt('C'),
           _br(), ...end(p, 'a'),
           _br(), ...end(p, 'b'),
           if (m.matType(p).isNotEmpty) ...[_br(), _txt(m.matHead(p, u, ignoreRdef: true), 'badge')],
@@ -1429,7 +1566,6 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
 
   // 국사정보: 층 + JOIN UP/NOC, 통합국 시트와 연결
   void _floorRows(GItem it, String key, _RF rf) {
-    const opts = ['1층', '2층', '3층', '4층', '5층', '기타', 'B1층'];
     final mk = m.keyOf('mother');
     final center = mk != null ? m.v('$mk.c') : '';
     final src = m.v('$key.src'), xl = m.floorExcelLine(key);
@@ -1442,23 +1578,28 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
             : ['모국명에 중심국을 입력하면, 저장된 국사정보는 자동으로 불러와요', 'hint'];
     rf.rows.add(_row([_txt(st[0], st[1])]));
 
+    // 기술마다 층을 여러 개 고를 수 있음 (두 층에 나눠 있을 때)
     for (var ti = 0; ti < 4; ti++) {
       final k = '$key.$ti';
-      final cur = m.v(k);
+      final sel = m.val(k).split(',').map((x) => x.trim()).where((x) => x.isNotEmpty).toList();
       final tg = GaetongModel.techs[ti];
-      if (cur.isNotEmpty) {
-        // 고른 층만 한 줄로, 누르면 다시 전체 목록
-        final jt = m.floorJoin(key, ti);
-        rf.rows.add(_row([
-          SizedBox(width: 52, child: Text(tg, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: _teal))),
-          _chip(cur, true, () => m.setVals({k: '', '$k.e': '', '$k.t': ''})),
-          if (cur == '기타') _inp('$k.e', '예: B2', width: 80),
-          for (final op in ['JOIN UP', 'NOC']) _chip(op, jt == op, () => m.setVal('$k.t', op), rect: true, join: true),
-        ], bg: _doneBg, border: _doneBorder));
-      } else {
-        rf.rows.add(_row([for (final op in opts) _chip(op, false, () => m.setVal(k, op))],
-            title: tg, bg: const Color(0xFFFAFBFD)));
-      }
+      rf.rows.add(_row([
+        for (final op in GaetongModel.floorOpts) _chip(op, sel.contains(op), () => m.toggleFloor(key, ti, op)),
+        if (sel.contains('기타')) _inp('$k.e', '예: B2', width: 80),
+      ], title: '$tg  (여러 층 가능)', done: sel.isNotEmpty, bg: const Color(0xFFFAFBFD)));
+    }
+    // 출입방법: 층마다 한 번 (같은 층을 여러 기술이 써도 한 번만)
+    final groups = m.floorGroups(key);
+    if (groups.isNotEmpty) {
+      rf.rows.add(_row([
+        for (final g in groups) ...[
+          _br(),
+          SizedBox(width: 64, child: Text(g.key, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: _teal))),
+          for (final op in ['JOIN UP', 'NOC'])
+            _chip(op, m.floorJoinOf(key, g.key) == op, () => m.setVal('$key.j.${g.key}', op), rect: true, join: true),
+          _txt(g.value.join(','), 'hint'),
+        ],
+      ], title: '출입방법 (층마다 한 번)', bg: _doneBg, border: _doneBorder));
     }
     // [국사정보 수정] : 개통 완료를 기다리지 않고 바로 통합국 F열로 (엑셀에서는 바뀐 칸이 빨간 글씨)
     if (center.isNotEmpty && xl.isNotEmpty && xl != src && src.isNotEmpty && !widget.canEditCenter) {
@@ -1612,7 +1753,7 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
     final done = total > 0 && filled == total;
     final hasBtns = sec.photo;
     // 사진 칸(현장 사진이 있는 칸): 맨 위에 센싱
-    if (m.items.any((x) => x.si == si && x.it.type == 'photo')) {
+    if (widget.tpl.tech != 'DU' && m.items.any((x) => x.si == si && x.it.type == 'photo')) {
       fields.insert(0, Padding(padding: const EdgeInsets.only(bottom: 10), child: _sensingBox()));
     }
     return Container(

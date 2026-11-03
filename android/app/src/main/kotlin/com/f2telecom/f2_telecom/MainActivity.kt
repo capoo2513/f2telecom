@@ -1,4 +1,4 @@
-package com.example.f2_telecom
+package com.f2telecom.f2_telecom
 
 import android.app.Activity
 import android.content.ClipData

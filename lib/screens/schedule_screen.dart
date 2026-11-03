@@ -23,6 +23,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
   bool _isSaving = false;
 
   int _myScore = 0;
+  static const int _twoWeekDays = 14; // 조회 이상이 볼 수 있는 날 수 (오늘 포함)
   bool _canEdit = false;
   bool _canCapture = false;
 
@@ -152,9 +153,10 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
         isLocked = true;
       }
     } else if (_myScore == 2) {
-      DateTime limit7Days = today.add(const Duration(days: 7));
-      if (current.isAfter(limit7Days) ||
-          current.isBefore(today.subtract(const Duration(days: 1)))) {
+      // 조회(2점): 지난 2주(14일 전) ~ 오늘부터 2주(14일)까지
+      DateTime limit2Weeks = today.add(const Duration(days: _twoWeekDays - 1));
+      DateTime past2Weeks = today.subtract(const Duration(days: _twoWeekDays));
+      if (current.isAfter(limit2Weeks) || current.isBefore(past2Weeks)) {
         isLocked = true;
       }
     }
@@ -264,8 +266,29 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
     int foundCount = 0;
     int searchedDays = 0;
 
-    int targetCount = (_myScore == 1) ? 3 : 7;
-    int maxSearchDays = (_myScore == 1) ? 30 : 7;
+    int targetCount = (_myScore == 1) ? 3 : _twoWeekDays;
+    int maxSearchDays = (_myScore == 1) ? 30 : _twoWeekDays;
+
+    // 조회 이상: 2주치를 한꺼번에 받아 둠 (하루씩 차례로 받으면 느림)
+    final Map<String, DocumentSnapshot<Map<String, dynamic>>> prefetched = {};
+    if (_myScore >= 2) {
+      final ids = List.generate(
+          _twoWeekDays,
+          (i) => DateFormat('yyyy-MM-dd')
+              .format(checkDate.add(Duration(days: i))));
+      try {
+        final snaps = await Future.wait(ids.map((id) => FirebaseFirestore
+            .instance
+            .collection('CalendarData')
+            .doc(id)
+            .get()));
+        for (int i = 0; i < ids.length; i++) {
+          prefetched[ids[i]] = snaps[i];
+        }
+      } catch (e) {
+        print(e);
+      }
+    }
 
     while (searchedDays < maxSearchDays) {
       if (_myScore == 1 && foundCount >= targetCount) break;
@@ -274,10 +297,11 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
       String dLabel = DateFormat('MM월 dd일 (E)', 'ko_KR').format(checkDate);
 
       try {
-        final snap = await FirebaseFirestore.instance
-            .collection('CalendarData')
-            .doc(dId)
-            .get();
+        final snap = prefetched[dId] ??
+            await FirebaseFirestore.instance
+                .collection('CalendarData')
+                .doc(dId)
+                .get();
 
         List<Map<String, dynamic>> validItems = [];
         bool hasDataToday = false;
@@ -322,7 +346,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
       builder: (ctx) => AlertDialog(
         title: Text(_myScore == 1
             ? "📅 예정된 일정 (3일치)"
-            : (_myScore == 2 ? "📅 주간 일정 (7일)" : "📅 주간 일정")),
+            : "📅 2주 일정 (14일)"),
         content: SizedBox(
           width: double.maxFinite,
           child: weeklyData.isEmpty
@@ -703,7 +727,8 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                     ElevatedButton(
                         onPressed: _goToday, child: const Text("오늘")),
                     ElevatedButton(
-                        onPressed: _showWeeklyPopup, child: const Text("주간")),
+                        onPressed: _showWeeklyPopup,
+                        child: Text(_myScore == 1 ? "주간" : "2주")),
                     IconButton(
                         icon: const Icon(Icons.arrow_forward_ios),
                         onPressed: () => _changeDate(1)),

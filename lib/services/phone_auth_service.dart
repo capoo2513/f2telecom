@@ -243,6 +243,33 @@ class PhoneAuthService {
     return null;
   }
 
+  /// [계정 삭제] 현재 비밀번호로 본인 확인 → 전화번호 색인·사용자 정보·로그인 계정 삭제
+  /// 성공 시 null, 실패 시 오류 문구 (Play 정책: 앱 안에서 계정 삭제 가능해야 함)
+  static Future<String?> deleteAccount(String currentPassword) async {
+    final err = await _reauth(currentPassword);
+    if (err != null) return err;
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return '로그인 정보가 없습니다. 다시 로그인해주세요.';
+    final uid = user.uid;
+    try {
+      final udoc = await _db.collection('users').doc(uid).get();
+      final phone = cleanPhone((udoc.data()?['phone'] ?? '').toString());
+      if (phone.isNotEmpty) {
+        final pi = await _db.collection('phone_index').doc(phone).get();
+        if (pi.exists && pi.data()?['uid'] == uid) await pi.reference.delete();
+      }
+      await _db.collection('users').doc(uid).delete();
+      await user.delete();
+    } on FirebaseAuthException catch (e) {
+      if (e.code == 'requires-recent-login') return '본인 확인이 만료되었습니다. 다시 시도해주세요.';
+      return '계정 삭제 실패: [${e.code}]';
+    } catch (e) {
+      return '계정 삭제 실패: $e';
+    }
+    await clearSession(signOut: false);
+    return null;
+  }
+
   /// [로그아웃]
   static Future<void> logout() => clearSession(signOut: true);
 

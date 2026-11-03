@@ -82,7 +82,88 @@ Future<void> showAccountSheet(BuildContext context) async {
                   MaterialPageRoute(builder: (_) => const LoginScreen()), (_) => false);
             },
           ),
+          ListTile(
+            leading: const Icon(Icons.person_remove_outlined, color: Colors.grey),
+            title: const Text('계정 삭제', style: TextStyle(color: Colors.grey)),
+            subtitle: const Text('내 계정과 등록 정보를 지웁니다'),
+            onTap: () {
+              Navigator.pop(sheetCtx);
+              _showDeleteAccount(context);
+            },
+          ),
           const SizedBox(height: 8),
+        ],
+      ),
+    ),
+  );
+}
+
+/// 계정 삭제: 안내 → 현재 비밀번호로 본인 확인 → 삭제 → 로그인 화면
+void _showDeleteAccount(BuildContext context) {
+  final cur = TextEditingController();
+  String? error;
+  bool busy = false;
+
+  showDialog(
+    context: context,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setD) => AlertDialog(
+        title: const Text('계정 삭제'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                  '계정을 삭제하면 로그인 계정과 이름·전화번호·이메일 등 등록 정보가 지워지고 되돌릴 수 없습니다.\n'
+                  '다시 사용하려면 새로 가입하고 관리자 승인을 받아야 합니다.\n\n'
+                  '(일정·개통 등 업무 기록은 회사 자료라 남습니다.)'),
+              const SizedBox(height: 12),
+              TextField(
+                  controller: cur,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                      labelText: '현재 비밀번호', border: OutlineInputBorder())),
+              if (error != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 10),
+                  child: Text(error!, style: const TextStyle(color: Colors.red)),
+                ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('취소')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+            onPressed: busy
+                ? null
+                : () async {
+                    setD(() {
+                      busy = true;
+                      error = null;
+                    });
+                    final err = await PhoneAuthService.deleteAccount(cur.text);
+                    if (!ctx.mounted) return;
+                    if (err != null) {
+                      setD(() {
+                        busy = false;
+                        error = err;
+                      });
+                      return;
+                    }
+                    Navigator.pop(ctx);
+                    if (!context.mounted) return;
+                    final messenger = ScaffoldMessenger.of(context);
+                    Navigator.of(context).pushAndRemoveUntil(
+                        MaterialPageRoute(builder: (_) => const LoginScreen()), (_) => false);
+                    messenger.showSnackBar(const SnackBar(content: Text('계정이 삭제되었습니다.')));
+                  },
+            child: busy
+                ? const SizedBox(
+                    width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                : const Text('삭제'),
+          ),
         ],
       ),
     ),

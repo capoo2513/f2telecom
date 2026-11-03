@@ -14,6 +14,9 @@ enum FieldType {
   cascade, // 1차 선택 → 2차 선택 (예: 납 축전지 → 1000)
   memo, // 여러 줄 입력
   fuse, // FA/FB 선택 + 숫자 → FA3
+  phone, // 전화번호 (숫자만 입력, '-' 자동)
+  choiceEtc, // 버튼 선택, '기타' 고르면 직접 입력칸 (밴드에는 입력한 글자)
+  chipMemo, // [상시가능] 같은 버튼 + 내용 직접 입력 (둘 다 가능)
 }
 
 class FieldDef {
@@ -54,6 +57,7 @@ class SectionDef {
   final String? note; // 안내 문구
   final List<RowDef> rows;
   final List<SectionDef> children; // 정류기 안의 축전지 처럼 하위 섹션
+  final bool noHeader; // 묶음 제목 없이 이어서 표시 (리모트 / 집·중·통)
 
   const SectionDef({
     required this.id,
@@ -63,6 +67,7 @@ class SectionDef {
     this.note,
     this.rows = const [],
     this.children = const [],
+    this.noHeader = false,
   });
 }
 
@@ -75,26 +80,39 @@ class CheckDef {
 
 class SurveyTemplate {
   final String id;
-  final String place; // 상면 / 입전
-  final String tech; // 4G / 5G
-  final String rack; // 신규랙(증설) / 기존랙
+  final String place; // 실사 종류 버튼: 상면 / 입전 / 집중통
+  final String title; // 랙증설 상면실사 / 입전 실사 / 리모트 실사 ...
+  final String tech; // 4G / 5G / 리모트 / 집·중·통
+  final String rack; // 기존랙 (없으면 '')
   final List<SectionDef> sections;
   final List<CheckDef> checks;
+  final bool flat; // true: 밴드 본문을 [리모트 실사] 형식으로 이어서 작성
+  final String? desc; // 구분 선택 화면 안내 문구 (없으면 항목 이름 나열)
 
   const SurveyTemplate({
     required this.id,
     required this.place,
+    required this.title,
     required this.tech,
-    required this.rack,
+    this.rack = '',
     required this.sections,
-    required this.checks,
+    this.checks = const [],
+    this.flat = false,
+    this.desc,
   });
 
-  /// 예: 상면 실사 · 4G · 신규랙(증설)
-  String get name => '$place 실사 · $tech · $rack';
+  /// 화면 위쪽/임시저장 목록 표시 (예: 랙증설 상면실사 · 4G, 리모트 실사)
+  String get name => flat ? title : [title, tech, rack].where((x) => x.isNotEmpty).join(' · ');
+
+  /// 밴드 '구분:' 줄 (예: 랙증설 상면실사 / 4G, 입전 실사 / 5G / 기존랙)
+  String get gubun => [title, tech, rack].where((x) => x.isNotEmpty).join(' / ');
+
+  /// 구분 선택 카드 제목 (예: 4G, 5G · 기존랙, 리모트)
+  String get choiceName => [tech, rack].where((x) => x.isNotEmpty).join(' · ');
 
   /// 분류 선택 화면의 안내 문구 (하위 항목 포함)
   String get summary {
+    if (desc != null) return desc!;
     final out = <String>[];
     void walk(List<SectionDef> list) {
       for (final s in list) {
@@ -327,8 +345,8 @@ const _cSubrack = CheckDef('서브랙', [_qty]);
 const tplFloor4G = SurveyTemplate(
   id: 'floor_4g',
   place: '상면',
+  title: '랙증설 상면실사',
   tech: '4G',
-  rack: '신규랙(증설)',
   sections: [_rack, ..._sections4G],
   checks: [
     _cBackhaulCore, _cDuCore, _cPower, _cBlank, _cSfp, _cVent, _cSubrack,
@@ -339,8 +357,8 @@ const tplFloor4G = SurveyTemplate(
 const tplFloor5G = SurveyTemplate(
   id: 'floor_5g',
   place: '상면',
+  title: '랙증설 상면실사',
   tech: '5G',
-  rack: '신규랙(증설)',
   sections: [
     // 5G 는 냉방기·하론 불필요 (2026-10-27)
     _rack, _rectifier5GFloor, _ipd, _battery5G, _backhaul, _etc,
@@ -354,6 +372,7 @@ const tplFloor5G = SurveyTemplate(
 const tplPower4G = SurveyTemplate(
   id: 'power_4g',
   place: '입전',
+  title: '입전 실사',
   tech: '4G',
   rack: '기존랙',
   sections: _sections4G,
@@ -363,6 +382,7 @@ const tplPower4G = SurveyTemplate(
 const tplPower5G = SurveyTemplate(
   id: 'power_5g',
   place: '입전',
+  title: '입전 실사',
   tech: '5G',
   rack: '기존랙',
   sections: [
@@ -377,12 +397,76 @@ const tplPower5G = SurveyTemplate(
   ],
 );
 
+// ------------------------------------------------------------
+// 집·중·통 / 리모트 실사 (2026-11-03)
+//  - 묶음 제목 없이 이어서 작성, 확인필요사항 없음
+//  - 밴드 본문: [리모트 실사] / 국소명 / (빈 줄) / 위치 : 5층 옥탑 / ...
+// ------------------------------------------------------------
+const tplJjt = SurveyTemplate(
+  id: 'jjt',
+  place: '집중통',
+  title: '집·중·통 실사',
+  tech: '집·중·통',
+  flat: true,
+  desc: '내용 직접 입력 · 사진',
+  sections: [
+    // 우선 내용 자유 입력 + 사진 (항목은 나중에 정함)
+    SectionDef(id: 'jjt', title: '집중통', noHeader: true, rows: [
+      RowDef(photo: '사진', fields: [FieldDef('내용', type: FieldType.memo)]),
+    ]),
+  ],
+);
+
+const tplRemote = SurveyTemplate(
+  id: 'remote',
+  place: '집중통',
+  title: '리모트 실사',
+  tech: '리모트',
+  flat: true,
+  desc: '형태 · 출입방법 · 전화번호 · 기타 · 사진',
+  sections: [
+    SectionDef(id: 'remote', title: '리모트', noHeader: true, rows: [
+      RowDef(fields: [
+        FieldDef('형태', type: FieldType.choiceEtc, options: ['옥상', '옥탑', '기타']),
+      ]),
+      RowDef(fields: [
+        FieldDef('출입방법', type: FieldType.chipMemo, options: ['상시가능']),
+      ]),
+      RowDef(fields: [FieldDef('전화번호', type: FieldType.phone)]),
+      // 사진은 기타에만 (밴드에 한번에 올라감)
+      RowDef(photo: '사진', fields: [FieldDef('기타', type: FieldType.memo)]),
+    ]),
+  ],
+);
+
 const List<SurveyTemplate> kSurveyTemplates = [
   tplFloor4G,
   tplFloor5G,
   tplPower4G,
   tplPower5G,
+  tplJjt,
+  tplRemote,
 ];
+
+/// 전화번호 자동 '-' : 010-1234-5678 / 02-1234-5678 / 031-123-4567 / 1588-1234
+String formatPhoneNumber(String input) {
+  var d = input.replaceAll(RegExp(r'[^0-9]'), '');
+  final seoul = d.startsWith('02');
+  final max = seoul ? 10 : 11;
+  if (d.length > max) d = d.substring(0, max);
+  if (d.isEmpty) return d;
+  if (d[0] != '0') {
+    if (d.length > 8) d = d.substring(0, 8);
+    return d.length > 4 ? '${d.substring(0, 4)}-${d.substring(4)}' : d;
+  }
+  final a = seoul ? 2 : 3;
+  if (d.length <= a) return d;
+  final head = d.substring(0, a);
+  final r = d.substring(a);
+  if (r.length <= 3) return '$head-$r';
+  if (r.length <= 7) return '$head-${r.substring(0, 3)}-${r.substring(3)}';
+  return '$head-${r.substring(0, 4)}-${r.substring(4)}';
+}
 
 SurveyTemplate? templateById(String id) {
   for (final t in kSurveyTemplates) {

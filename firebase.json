@@ -1,0 +1,33 @@
+{
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "f2-telecom-online",
+          "appId": "1:428703000352:android:a075e9bc312650e74ad945",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "f2-telecom-online",
+          "configurations": {
+            "android": "1:428703000352:android:a075e9bc312650e74ad945",
+            "ios": "1:428703000352:ios:f9f95da0c50ccb334ad945",
+            "macos": "1:428703000352:ios:f9f95da0c50ccb334ad945",
+            "web": "1:428703000352:web:494937486d8623d54ad945",
+            "windows": "1:428703000352:web:bc4ec72b4b85563e4ad945"
+          }
+        }
+      }
+    }
+  },
+  "hosting": {
+    "public": "hosting",
+    "ignore": [
+      "firebase.json",
+      "**/.*"
+    ],
+    "cleanUrls": false
+  }
+}

@@ -61,3 +61,7 @@ _backup_*/
 기타/엑셀_로그인수정/*.cls
 !기타/엑셀_로그인수정/mod_CenterSync.bas
 ~$*
+
+# 출시용 서명 키 비밀번호 (절대 올리지 않음)
+key.properties
+android/key.properties

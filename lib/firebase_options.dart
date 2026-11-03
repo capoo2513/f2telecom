@@ -42,7 +42,7 @@ class DefaultFirebaseOptions {
 
   static const FirebaseOptions web = FirebaseOptions(
     apiKey: 'AIzaSyD5VL2dQF615MS6fAvKYTvMKk83JAr7nNM',
-    appId: '1:428703000352:web:ccb5169d33b01d654ad945',
+    appId: '1:428703000352:web:494937486d8623d54ad945',
     messagingSenderId: '428703000352',
     projectId: 'f2-telecom-online',
     authDomain: 'f2-telecom-online.firebaseapp.com',
@@ -51,33 +51,31 @@ class DefaultFirebaseOptions {
 
   static const FirebaseOptions android = FirebaseOptions(
     apiKey: 'AIzaSyBjTldxi43ARWNpZLtVyQDeErolgwuinYM',
-    appId: '1:428703000352:android:c7c616ae3a9b099d4ad945',
+    appId: '1:428703000352:android:a075e9bc312650e74ad945',
     messagingSenderId: '428703000352',
     projectId: 'f2-telecom-online',
     storageBucket: 'f2-telecom-online.firebasestorage.app',
   );
-
   static const FirebaseOptions ios = FirebaseOptions(
     apiKey: 'AIzaSyDPHZhkc7SmVcqN9QBZpAKn6AJMYKgPxMk',
-    appId: '1:428703000352:ios:bb8e290d6ad2bc104ad945',
+    appId: '1:428703000352:ios:f9f95da0c50ccb334ad945',
     messagingSenderId: '428703000352',
     projectId: 'f2-telecom-online',
     storageBucket: 'f2-telecom-online.firebasestorage.app',
-    iosBundleId: 'com.example.f2_telecom',
+    iosBundleId: 'com.example.f2Telecom',
   );
-
   static const FirebaseOptions macos = FirebaseOptions(
     apiKey: 'AIzaSyDPHZhkc7SmVcqN9QBZpAKn6AJMYKgPxMk',
-    appId: '1:428703000352:ios:bb8e290d6ad2bc104ad945',
+    appId: '1:428703000352:ios:f9f95da0c50ccb334ad945',
     messagingSenderId: '428703000352',
     projectId: 'f2-telecom-online',
     storageBucket: 'f2-telecom-online.firebasestorage.app',
-    iosBundleId: 'com.example.f2_telecom',
+    iosBundleId: 'com.example.f2Telecom',
   );
 
   static const FirebaseOptions windows = FirebaseOptions(
-    apiKey: 'AIzaSyD5VL2dQF615MS6fAvKYTvMKk83JAr7nNM',
-    appId: '1:428703000352:web:494937486d8623d54ad945',
+    apiKey: 'AIzaSyCXWlk6rlfhOLSvZVOocTxJ3HJ6X0cyPkY',
+    appId: '1:428703000352:web:bc4ec72b4b85563e4ad945',
     messagingSenderId: '428703000352',
     projectId: 'f2-telecom-online',
     authDomain: 'f2-telecom-online.firebaseapp.com',

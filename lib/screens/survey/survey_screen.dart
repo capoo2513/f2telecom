@@ -15,6 +15,22 @@ import '../gaetong/gaetong_store.dart' show CenterService;
 
 const _bandGreen = Color(0xFF00A032);
 
+// 국소명은 여러 줄로 넣을 수 있음 (예: 청화아파트WRU / (아)(캠)청화아파트AAUE_1 ...)
+//  - 사진 폴더·파일명은 첫 줄 이름
+//  - 화면 위쪽·임시저장 목록은 '첫 줄 외 N'
+//  - 밴드 본문은 모든 줄
+List<String> _stationLines(String s) =>
+    s.split('\n').map((x) => x.trim()).where((x) => x.isNotEmpty).toList();
+String _firstStation(String s) {
+  final l = _stationLines(s);
+  return l.isEmpty ? '' : l.first;
+}
+String _shortStation(String s) {
+  final l = _stationLines(s);
+  if (l.isEmpty) return '';
+  return l.length > 1 ? '${l.first} 외 ${l.length - 1}' : l.first;
+}
+
 // ==================================================================
 // 1. 실사 시작 화면 : 임시저장 목록 → 국소명 → 층 → 상면/입전 → 4G/5G
 // ==================================================================
@@ -29,7 +45,7 @@ class _SurveyStartScreenState extends State<SurveyStartScreen> {
   final Map<String, String> _addressByName = {};
   final _stationCtrl = TextEditingController();
   final _floorCtrl = TextEditingController();
-  String _kind = ''; // 상면 / 입전
+  String _kind = ''; // 상면 / 입전 / 집중통
   SurveyTemplate? _selected;
   List<SurveyDraft> _drafts = [];
   List<String> _centerNames = []; // 엑셀 통합국 시트 E열 중심국명 (Firebase CenterData)
@@ -52,10 +68,12 @@ class _SurveyStartScreenState extends State<SurveyStartScreen> {
   /// 입력한 글자가 들어간 중심국명 (띄어쓰기·대소문자 무시, 앞부분 일치 먼저, 최대 8개)
   List<String> _centerMatches() {
     String norm(String x) => x.replaceAll(RegExp(r'\s+'), '').toLowerCase();
-    final q = norm(_stationCtrl.text);
+    // 여러 줄이면 지금 쓰고 있는 마지막 줄로 찾음
+    final last = _stationCtrl.text.split('\n').last;
+    final q = norm(last);
     if (q.isEmpty) return [];
     final hit = _centerNames.where((n) => norm(n).contains(q)).toList();
-    if (hit.length == 1 && hit.first == _station) return []; // 이미 골랐음
+    if (hit.length == 1 && hit.first == last.trim()) return []; // 이미 골랐음
     hit.sort((a, b) {
       final pa = norm(a).startsWith(q) ? 0 : 1, pb = norm(b).startsWith(q) ? 0 : 1;
       return pa != pb ? pa - pb : a.compareTo(b);
@@ -101,7 +119,8 @@ class _SurveyStartScreenState extends State<SurveyStartScreen> {
     if (mounted) setState(() => _drafts = list);
   }
 
-  String get _station => _stationCtrl.text.trim();
+  /// 국소명 (여러 줄이면 빈 줄 빼고 줄바꿈으로 이음)
+  String get _station => _stationLines(_stationCtrl.text).join('\n');
 
   void _snack(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
@@ -115,7 +134,7 @@ class _SurveyStartScreenState extends State<SurveyStartScreen> {
         builder: (_) => SurveyFormScreen(
           station: station,
           floor: floor,
-          address: _addressByName[station] ?? '',
+          address: _addressByName[_firstStation(station)] ?? '',
           template: tpl,
           draft: draft,
         ),
@@ -126,9 +145,13 @@ class _SurveyStartScreenState extends State<SurveyStartScreen> {
 
   Future<void> _start() async {
     if (_station.isEmpty) return _snack('국소명을 먼저 입력해주세요.');
-    if (_kind.isEmpty) return _snack('상면 실사 / 입전 실사를 선택해주세요.');
+    if (_kind.isEmpty) return _snack('실사 종류를 선택해주세요.');
     final tpl = _selected;
-    if (tpl == null) return _snack('4G / 5G 구분을 선택해주세요.');
+    if (tpl == null) {
+      return _snack(_kind == '집중통'
+          ? '집·중·통 / 리모트 를 선택해주세요.'
+          : '4G / 5G 구분을 선택해주세요.');
+    }
 
     final existing = await SurveyDraftStore.find(_station, tpl.id);
     if (!mounted) return;
@@ -187,6 +210,13 @@ class _SurveyStartScreenState extends State<SurveyStartScreen> {
     }
   }
 
+  // 실사 종류 버튼 [id, 이름, 안내]
+  static const _kinds = [
+    ['상면', '랙증설 상면실사', '4G / 5G'],
+    ['입전', '입전 실사', '4G / 5G · 기존랙'],
+    ['집중통', '집·중·통 / 리모트 실사', '집·중·통 · 리모트'],
+  ];
+
   Widget _title(String t) => Padding(
         padding: const EdgeInsets.only(top: 22, bottom: 8),
         child: Text(t,
@@ -195,7 +225,7 @@ class _SurveyStartScreenState extends State<SurveyStartScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final address = _addressByName[_station] ?? '';
+    final address = _addressByName[_firstStation(_station)] ?? '';
     final floor = _floorCtrl.text.trim();
     final tplList = kSurveyTemplates.where((t) => t.place == _kind).toList();
 
@@ -231,7 +261,7 @@ class _SurveyStartScreenState extends State<SurveyStartScreen> {
                         margin: const EdgeInsets.only(top: 6),
                         child: ListTile(
                           dense: true,
-                          title: Text(d.station,
+                          title: Text(_shortStation(d.station),
                               style: const TextStyle(fontWeight: FontWeight.bold)),
                           subtitle: Text(
                               '${t?.name ?? d.templateId}${d.floor.isNotEmpty ? ' · ${d.floor}층' : ''}\n'
@@ -266,9 +296,13 @@ class _SurveyStartScreenState extends State<SurveyStartScreen> {
             TextField(
               controller: _stationCtrl,
               focusNode: _stationFocus,
+              // 여러 줄 입력 가능 — 줄 수만큼 칸이 늘어나고 아래 항목은 스크롤
+              keyboardType: TextInputType.multiline,
+              minLines: 1,
+              maxLines: null,
               onChanged: (_) => setState(() {}),
               decoration: InputDecoration(
-                hintText: '국소명 입력 (중심국명 일부만 쳐도 아래에 목록이 떠요)',
+                hintText: '국소명 입력 (여러 개면 줄을 바꿔서 입력)',
                 prefixIcon: const Icon(Icons.cell_tower),
                 border: const OutlineInputBorder(),
                 suffixIcon: _stationCtrl.text.isEmpty
@@ -295,14 +329,25 @@ class _SurveyStartScreenState extends State<SurveyStartScreen> {
                         leading: const Icon(Icons.location_city, size: 20, color: Colors.indigo),
                         title: Text(n, style: const TextStyle(fontSize: 15)),
                         onTap: () {
-                          _stationCtrl.text = n;
-                          _stationCtrl.selection = TextSelection.collapsed(offset: n.length);
+                          // 마지막 줄만 고른 이름으로 바꿈 (위 줄들은 그대로)
+                          final ls = _stationCtrl.text.split('\n');
+                          ls[ls.length - 1] = n;
+                          final t = ls.join('\n');
+                          _stationCtrl.text = t;
+                          _stationCtrl.selection = TextSelection.collapsed(offset: t.length);
                           FocusScope.of(context).unfocus();
                           setState(() {});
                         },
                       ),
                   ],
                 ),
+              ),
+            if (_stationLines(_station).length > 1)
+              Padding(
+                padding: const EdgeInsets.only(top: 6, left: 4),
+                child: Text(
+                    "국소 ${_stationLines(_station).length}개 · 사진 폴더는 첫 줄 이름 '${_firstStation(_station)}'",
+                    style: const TextStyle(color: Colors.grey)),
               ),
             if (address.isNotEmpty)
               Padding(
@@ -334,31 +379,23 @@ class _SurveyStartScreenState extends State<SurveyStartScreen> {
 
             // ----- ③ 실사 종류 -----
             _title('③ 실사 종류'),
-            Row(
-              children: [
-                for (final k in const [
-                  ['상면', '상면 실사', '4G / 5G · 신규랙(증설)'],
-                  ['입전', '입전 실사', '4G / 5G · 기존랙'],
-                ]) ...[
-                  Expanded(
-                    child: _KindButton(
-                      label: k[1],
-                      sub: k[2],
-                      selected: _kind == k[0],
-                      onTap: () => setState(() {
-                        _kind = k[0];
-                        _selected = null;
-                      }),
-                    ),
-                  ),
-                  if (k[0] == '상면') const SizedBox(width: 10),
-                ],
-              ],
-            ),
+            for (final k in _kinds)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: _KindButton(
+                  label: k[1],
+                  sub: k[2],
+                  selected: _kind == k[0],
+                  onTap: () => setState(() {
+                    _kind = k[0];
+                    _selected = null;
+                  }),
+                ),
+              ),
 
             // ----- ④ 구분 -----
             if (_kind.isNotEmpty) ...[
-              _title('④ $_kind 실사 구분'),
+              _title('④ ${_kinds.firstWhere((k) => k[0] == _kind)[1]} 구분'),
               ...tplList.map((t) {
                 final sel = _selected?.id == t.id;
                 return Card(
@@ -375,7 +412,7 @@ class _SurveyStartScreenState extends State<SurveyStartScreen> {
                     leading: Icon(
                         sel ? Icons.radio_button_checked : Icons.radio_button_off,
                         color: Colors.indigo),
-                    title: Text('${t.tech} · ${t.rack}',
+                    title: Text(t.choiceName,
                         style: const TextStyle(fontWeight: FontWeight.bold)),
                     subtitle: Text(t.summary, style: const TextStyle(fontSize: 12)),
                   ),
@@ -399,13 +436,22 @@ class _SurveyStartScreenState extends State<SurveyStartScreen> {
             const SizedBox(height: 16),
             // 설치된 앱이 최신인지 확인용 (코드 바꿀 때마다 올림)
             const Center(
-              child: Text('실사 빌드 2026-10-27 #12',
+              child: Text('실사 빌드 2026-11-03 #16',
                   style: TextStyle(fontSize: 11, color: Colors.grey)),
             ),
           ],
         ),
       ),
     );
+  }
+}
+
+/// 전화번호 입력 시 '-' 자동 (010-1234-5678 / 02-123-4567 ...)
+class _PhoneFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
+    final t = formatPhoneNumber(newValue.text);
+    return TextEditingValue(text: t, selection: TextSelection.collapsed(offset: t.length));
   }
 }
 
@@ -432,7 +478,7 @@ class _KindButton extends StatelessWidget {
         borderRadius: BorderRadius.circular(14),
         onTap: onTap,
         child: SizedBox(
-          height: 84,
+          height: 72, // 버튼 높이 통일
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -671,7 +717,7 @@ class _SurveyFormScreenState extends State<SurveyFormScreen> {
       context,
       MaterialPageRoute(
         builder: (_) => SurveyCameraScreen(
-          station: widget.station,
+          station: _firstStation(widget.station), // 사진 폴더·파일명은 첫 줄
           baseName: base,
           label: '${inst.name} · $label',
           startNumber: (_photos[key]?.length ?? 0) + 1,
@@ -686,7 +732,7 @@ class _SurveyFormScreenState extends State<SurveyFormScreen> {
   Future<void> _pickPhotos(_Inst inst, int r) async {
     final key = _pKey(inst.path, r);
     try {
-      final paths = await SurveyPhotoService.pickFromGallery(widget.station);
+      final paths = await SurveyPhotoService.pickFromGallery(_firstStation(widget.station));
       if (paths.isEmpty || !mounted) return;
       setState(() => (_photos[key] ??= []).addAll(paths));
       _changed();
@@ -738,6 +784,12 @@ class _SurveyFormScreenState extends State<SurveyFormScreen> {
 
   // ---------------- 값 표시 (단위/접두어) ----------------
   String _fmt(FieldDef f, String key) {
+    if (f.type == FieldType.chipMemo) {
+      // 상시가능 / 관리실 열쇠 수령
+      final a = (_values[key] ?? '').trim();
+      final b = (_values['$key.memo'] ?? '').trim();
+      return a.isNotEmpty && b.isNotEmpty ? '$a / $b' : (a.isNotEmpty ? a : b);
+    }
     final v = (_values[key] ?? '').trim();
     if (v.isEmpty) return '';
     if (f.type == FieldType.cascade) {
@@ -747,6 +799,11 @@ class _SurveyFormScreenState extends State<SurveyFormScreen> {
     if (f.type == FieldType.fuse) {
       return v + (_values['$key.num'] ?? '').trim();
     }
+    if (f.type == FieldType.choiceEtc) {
+      final etc = (_values['$key.etc'] ?? '').trim();
+      return v == '기타' && etc.isNotEmpty ? etc : v;
+    }
+    if (f.type == FieldType.phone) return v;
     String out = v;
     if (f.prefix.isNotEmpty &&
         !out.toUpperCase().startsWith(f.prefix.toUpperCase())) {
@@ -761,12 +818,13 @@ class _SurveyFormScreenState extends State<SurveyFormScreen> {
 
   // ---------------- 밴드 본문 만들기 ----------------
   String buildBody() {
+    if (_tpl.flat) return _buildFlatBody();
     final sb = StringBuffer();
     sb.writeln('[실사] ${widget.station}');
-    sb.writeln('구분: ${_tpl.place} 실사 / ${_tpl.tech} / ${_tpl.rack}');
+    sb.writeln('구분: ${_tpl.gubun}');
     if (widget.floor.isNotEmpty) sb.writeln('층: ${widget.floor}층');
     if (widget.address.isNotEmpty) sb.writeln('주소: ${widget.address}');
-    sb.writeln('실사일: ${DateFormat('yyyy-MM-dd').format(DateTime.now())}');
+    // 실사일은 넣지 않음 (밴드 올린 날 = 실사일)
 
     for (final inst in _allInstances()) {
       final lines = <String>[];
@@ -815,6 +873,39 @@ class _SurveyFormScreenState extends State<SurveyFormScreen> {
       }
     }
     return sb.toString().trimRight();
+  }
+
+  /// 리모트 / 집·중·통 본문
+  /// [리모트 실사]
+  /// 국소명
+  /// (빈 줄)
+  /// 위치 : 5층 옥탑
+  /// 출입방법 : 상시가능 / ...
+  /// 전화번호 : 010-1234-5678
+  /// 기타 : (내용 있을 때만)
+  String _buildFlatBody() {
+    final lines = <String>['[${_tpl.title}]', widget.station, ''];
+    final fl = widget.floor.isNotEmpty ? '${widget.floor}층' : '';
+    final insts = _allInstances();
+    final hasShape = insts.any((i) => i.def.rows.any((r) => r.fields.any((f) => f.label == '형태')));
+    if (!hasShape && fl.isNotEmpty) lines.add('위치 : $fl');
+    for (final inst in insts) {
+      for (int r = 0; r < inst.def.rows.length; r++) {
+        final row = inst.def.rows[r];
+        for (int f = 0; f < row.fields.length; f++) {
+          final field = row.fields[f];
+          final v = _fmt(field, _vKey(inst.path, r, f));
+          if (field.label == '형태') {
+            lines.add('위치 : ${[fl, v].where((x) => x.isNotEmpty).join(' ')}');
+            continue;
+          }
+          if (field.label == '기타' && v.isEmpty) continue;
+          if (field.type == FieldType.memo && v.isEmpty) continue; // 집·중·통 내용 비었으면 생략
+          lines.add('${field.label} : $v');
+        }
+      }
+    }
+    return lines.join('\n').trimRight();
   }
 
   List<String> allPhotoPaths() {
@@ -899,7 +990,7 @@ class _SurveyFormScreenState extends State<SurveyFormScreen> {
           title: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(widget.station, style: const TextStyle(fontSize: 17)),
+              Text(_shortStation(widget.station), style: const TextStyle(fontSize: 17)),
               Text(
                   '${_tpl.name}${widget.floor.isNotEmpty ? ' · ${widget.floor}층' : ''}',
                   style: const TextStyle(fontSize: 12, color: Colors.white70)),
@@ -932,7 +1023,7 @@ class _SurveyFormScreenState extends State<SurveyFormScreen> {
                     child: _buildSection(s, '', '', '', 0),
                   ),
                 )),
-            _buildChecks(),
+            if (_tpl.checks.isNotEmpty) _buildChecks(),
           ],
         ),
         bottomNavigationBar: SafeArea(
@@ -999,6 +1090,7 @@ class _SurveyFormScreenState extends State<SurveyFormScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          if (!def.noHeader)
           Row(
             children: [
               Icon(inst.depth == 0 ? Icons.label : Icons.subdirectory_arrow_right,
@@ -1166,6 +1258,62 @@ class _SurveyFormScreenState extends State<SurveyFormScreen> {
               ],
             ),
           ],
+        );
+      case FieldType.choiceEtc:
+        // 옥상 / 옥탑 / 기타 → 기타면 직접 입력 (예: 피트실내)
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _choiceChips(f.label, f.options, key),
+            if (_values[key] == '기타')
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: TextField(
+                  controller: _ctrl('$key.etc'),
+                  onChanged: (v) => _setValue('$key.etc', v),
+                  decoration: const InputDecoration(
+                    labelText: '기타 내용 직접 입력 (예: 피트실내)',
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ),
+          ],
+        );
+      case FieldType.chipMemo:
+        // [상시가능] 버튼 + 내용 직접 입력 (둘 다 가능)
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _choiceChips(f.label, f.options, key),
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: TextField(
+                controller: _ctrl('$key.memo'),
+                keyboardType: TextInputType.multiline,
+                maxLines: 3,
+                onChanged: (v) => _setValue('$key.memo', v),
+                decoration: const InputDecoration(
+                  labelText: '내용 직접 입력',
+                  isDense: true,
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ),
+          ],
+        );
+      case FieldType.phone:
+        return TextField(
+          controller: _ctrl(key),
+          keyboardType: TextInputType.phone,
+          inputFormatters: [_PhoneFormatter()],
+          onChanged: (v) => _setValue(key, v),
+          decoration: InputDecoration(
+            labelText: f.label,
+            hintText: "숫자만 입력 ( '-' 자동)",
+            isDense: true,
+            border: const OutlineInputBorder(),
+          ),
         );
       case FieldType.text:
       case FieldType.number:
@@ -1531,6 +1679,8 @@ class _SurveyPreviewScreenState extends State<SurveyPreviewScreen> {
           GridView.count(
             crossAxisCount: 4,
             shrinkWrap: true,
+            primary: false,
+            padding: EdgeInsets.zero,
             physics: const NeverScrollableScrollPhysics(),
             mainAxisSpacing: 4,
             crossAxisSpacing: 4,

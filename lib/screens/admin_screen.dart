@@ -1,12 +1,60 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 // 아래 파일들이 반드시 있어야 합니다.
 import 'user_management_screen.dart';
 import 'suggestion_list_screen.dart';
 import 'all_memos_screen.dart';
 import 'system_config_screen.dart';
 
-class AdminScreen extends StatelessWidget {
+class AdminScreen extends StatefulWidget {
   const AdminScreen({super.key});
+
+  @override
+  State<AdminScreen> createState() => _AdminScreenState();
+}
+
+class _AdminScreenState extends State<AdminScreen> {
+  StreamSubscription? _sub;
+  bool _kicked = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // 관리자 메뉴(사용자 관리 등)를 열어 둔 동안에도 내 권한을 계속 확인:
+    // 관리자 권한이 빠지면 관리자 화면을 모두 닫고 홈으로
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _kickOut());
+      return;
+    }
+    _sub = FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .snapshots()
+        .listen((doc) {
+      final data = doc.data();
+      final scores = (data?['access_scores'] as Map?) ?? {};
+      final isAdmin = scores['admin'] == 3 || data?['role'] == 'admin';
+      if (!isAdmin) _kickOut();
+    });
+  }
+
+  void _kickOut() {
+    if (_kicked || !mounted) return;
+    _kicked = true;
+    final messenger = ScaffoldMessenger.of(context);
+    Navigator.of(context).popUntil((r) => r.isFirst);
+    messenger.showSnackBar(
+        const SnackBar(content: Text('관리자 권한이 없어 관리자 메뉴를 닫았습니다.')));
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {

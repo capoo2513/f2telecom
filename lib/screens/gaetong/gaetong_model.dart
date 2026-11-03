@@ -62,12 +62,14 @@ class GSection {
 }
 
 class GTemplate {
-  final String tech; // 5G / 4G
-  final String eq; // AAU / PRU / GIRO / RRU / MIBOS
+  final String tech; // 5G / 4G / DU
+  final String eq; // AAU / PRU / GIRO / RRU / MIBOS / WDU / LTE DU / 5G DUH
   final String unit; // AAU_1 처럼 쓰는 장비 이름
   final List<GSection> sections;
-  GTemplate(this.tech, this.eq, this.sections, {String? unit}) : unit = unit ?? 'AAU';
-  String get name => '$tech $eq';
+  final String? title; // 이름 (없으면 '5G AAU' 처럼 tech + eq)
+  final String? btnSmall, btnBig; // 시작 화면 버튼 작은 글씨 / 큰 글씨
+  GTemplate(this.tech, this.eq, this.sections, {String? unit, this.title, this.btnSmall, this.btnBig}) : unit = unit ?? 'AAU';
+  String get name => title ?? '$tech $eq';
 }
 
 /// 자재 사용처
@@ -272,7 +274,64 @@ List<GTemplate> gaetongTemplates() {
       x.sections.insertAll(ai + 1, center);
     }
   }
-  return all;
+  // ===== DU (WDU / LTE DU / 5G DUH) : 엑셀 DU 시트 양식 =====
+  //  국소명 / 사업구분 / 건물 전체층·설치층 / ACTA 등록 / DU Blank / 다심 정리Kit / 특이사항&자재내역 / 선번
+  GTemplate du(String eq, String small, String big) => GTemplate(
+        'DU',
+        eq,
+        [
+          // DU: 사업구분 신설(기본)·이설만, 개통여부·모국명 없음
+          GSection('기본정보', [combo('사업구분', ['신설', '이설'], def: '신설', ph: '선택 또는 입력')]),
+          GSection('설치 정보', [
+            GItem('건물 전체층 / 설치층', type: 'bldg', noLabel: true),
+            choice('ACTA 등록 (완료/미완료)', ['완료', '미완료']),
+            // 수량 직접 입력 또는 미사용 (WDU 는 없음)
+            if (eq != 'WDU') GItem('DU Blank', type: 'qtyNu'),
+            if (eq != 'WDU') GItem('다심 정리Kit', type: 'qtyNu'),
+          ], photo: true),
+          GSection('자재내역', [
+            GItem('DU 자재', type: 'duMats', id: 'dumats', noLabel: true),
+            GItem('특이사항&자재내역', type: 'memo', opt: true, matsFrom: 'dumats', form: '특이사항 · 기타 자재 (여러 줄)', ph: '예: S신당에서 WDU 4대 철거사용'),
+          ], photo: true),
+          GSection('선번', [GItem('선번', type: 'memo', opt: true, form: '선번 (여러 줄)', ph: '예: 4층(LTE)\nLTE DU 메인백홀\nR3-04_층간FDF#1_9S_139,140P(뒷면)')]),
+          photo(),
+        ],
+        unit: eq,
+        title: eq,
+        btnSmall: small,
+        btnBig: big,
+      );
+  return [...all, du('WDU', '3G', 'WDU'), du('LTE DU', '4G', 'LTE DU'), du('5G DUH', '5G', 'DUH')];
+}
+
+/// DU 자재 하나 (엑셀 DU 시트 실제 사용 자재)
+///  len 길이 칸 / real 실거리 칸 / sec 구간 기본값 / defLen 길이 기본값 / kinds 종류 버튼 / subs 종류별 세부 버튼
+///  nu 미사용 버튼 / fixedSec 정해진 구간 / fmt 밴드 이름
+class DuPreset {
+  final String name;
+  final bool len, real, nu;
+  final String? sec, defLen, defKind, fixedSec;
+  final List<String> kinds;
+  final Map<String, List<String>> subs;
+  final String Function(String kind, String sub)? fmt;
+  const DuPreset(this.name,
+      {this.len = false,
+      this.real = false,
+      this.nu = false,
+      this.sec,
+      this.defLen,
+      this.defKind,
+      this.fixedSec,
+      this.kinds = const [],
+      this.subs = const {},
+      this.fmt});
+}
+
+class DuEntry {
+  final String id, p;
+  final DuPreset? pr; // null 이면 기타 (이름 직접 입력)
+  DuEntry(this.id, this.p, this.pr);
+  bool get etc => pr == null;
 }
 
 // ------------------------------------------------------------
@@ -424,14 +483,27 @@ class GaetongModel {
   }
 
   String muxFmt(String key) {
+    // 이미 만들어 둔 셀프 위치 글을 붙여 넣으면 그 글 그대로
+    if (v('$key.txt').isNotEmpty) return v('$key.txt');
     String g(String s) => v('$key.$s');
     if ([g('a'), g('b'), g('c'), g('d'), g('e')].every((x) => x.isEmpty)) return '';
     final pre = (g('a').isNotEmpty || g('b').isNotEmpty) ? 'R${g('a')}-${g('b')}_' : '';
     return '${pre}S-MUX#${g('c')}_Shelf${g('d')}-${g('e')}${g('bk').isNotEmpty ? '(배면)' : ''}';
   }
 
+  /// SFP 10G/25G: 직접 고른 값, 없으면 첫 번째 장비에서 고른 값을 그대로 (바꿀 수 있음)
+  String sfpSp(String key, int n) {
+    final own = v('$key.$n.sp');
+    if (own.isNotEmpty) return own;
+    final first = units().first;
+    return n == first ? '' : v('$key.$first.sp');
+  }
+
+  /// SFP 입력 완료: 10G/25G 와 번호 둘 다 있어야
+  bool sfpDone(String key, int n) => sfpSp(key, n).isNotEmpty && v('$key.$n.no').isNotEmpty;
+
   String sfpVal(String key, int n) {
-    final sp = v('$key.$n.sp'), no = v('$key.$n.no');
+    final sp = sfpSp(key, n), no = v('$key.$n.no');
     final cc = n > 1 && v('$key.$n.cc').isNotEmpty;
     if (sp.isEmpty && no.isEmpty && !cc) return '';
     return [cc ? 'CC' : modBase(), sp, no.isNotEmpty ? '$no번' : ''].where((x) => x.isNotEmpty).join(' ');
@@ -478,56 +550,83 @@ class GaetongModel {
   // ----- 국사정보 (층 / JOIN UP·NOC) -----
   static const techs = ['3G', '4G', '5G', '사업자'];
 
-  String floorAt(String key, int ti) {
-    var f = v('$key.$ti');
-    if (f == '기타') {
-      f = v('$key.$ti.e');
-      if (f.isNotEmpty && !f.endsWith('층')) f += '층';
-    }
-    return f;
-  }
+  static const floorOpts = ['1층', '2층', '3층', '4층', '5층', '기타', 'B1층'];
 
-  String floorJoin(String key, int ti) {
-    final own = v('$key.$ti.t');
-    if (own.isNotEmpty) return own;
-    final f = floorAt(key, ti), f5 = floorAt(key, 2);
-    return (ti == 2 || (f.isNotEmpty && f == f5)) ? 'NOC' : 'JOIN UP';
-  }
-
-  /// 밴드: '3G : 1층 / 4G : 2층 / 5G,사업자 : 3층'
-  String floorLine(String key) {
-    final map = <String, List<String>>{};
-    for (var ti = 0; ti < 4; ti++) {
-      final f = floorAt(key, ti);
-      if (f.isEmpty) continue;
-      (map[f] ??= []).add(techs[ti]);
-    }
-    return map.entries.map((e) => '${e.value.join(',')} : ${e.key}').join(' / ');
-  }
-
-  /// 엑셀 통합국 F열: '3G : 4층(JOIN UP) / 5G,사업자 : 3층(NOC)'
-  String floorExcelLine(String key) {
-    final map = <String, List<String>>{};
-    for (var ti = 0; ti < 4; ti++) {
-      final f = floorAt(key, ti);
-      if (f.isEmpty) continue;
-      (map['$f(${floorJoin(key, ti)})'] ??= []).add(techs[ti]);
-    }
-    return map.entries.map((e) => '${e.value.join(',')} : ${e.key}').join(' / ');
-  }
-
-  static Map<int, List<String>> parseFloorLine(String line) {
-    final out = <int, List<String>>{};
-    for (final part in line.split('/')) {
-      final m = RegExp(r'^(.+?)\s*:\s*(.+?)\s*\((JOIN UP|NOC)\)\s*$').firstMatch(part.trim());
-      if (m == null) continue;
-      for (final tg in m.group(1)!.split(',')) {
-        final ti = techs.indexOf(tg.trim());
-        if (ti >= 0) out[ti] = [m.group(2)!.trim(), m.group(3)!];
+  /// 한 기술(3G·4G·5G·사업자)이 쓰는 층들 — 여러 층 가능 (값: '3층,4층' / 기타는 .e)
+  List<String> floorsAt(String key, int ti) {
+    final out = <String>[];
+    for (final t in val('$key.$ti').split(',').map((x) => x.trim()).where((x) => x.isNotEmpty)) {
+      var f = t;
+      if (f == '기타') {
+        f = v('$key.$ti.e');
+        if (f.isNotEmpty && !f.endsWith('층')) f += '층';
       }
+      if (f.isNotEmpty && !out.contains(f)) out.add(f);
     }
     return out;
   }
+
+  String floorAt(String key, int ti) => floorsAt(key, ti).join(',');
+
+  /// 층마다 출입방법 하나 (같은 층은 한 번만): 직접 고른 값, 없으면 5G가 있는 층은 NOC·나머지는 JOIN UP
+  String floorJoinOf(String key, String floor) {
+    final own = v('$key.j.$floor');
+    if (own.isNotEmpty) return own;
+    return floorsAt(key, 2).contains(floor) ? 'NOC' : 'JOIN UP';
+  }
+
+  /// 층별로 묶은 목록: [층, 그 층을 쓰는 기술들] (층 순서는 처음 나온 순서)
+  List<MapEntry<String, List<String>>> floorGroups(String key) {
+    final map = <String, List<String>>{};
+    for (var ti = 0; ti < 4; ti++) {
+      for (final f in floorsAt(key, ti)) {
+        (map[f] ??= []).add(techs[ti]);
+      }
+    }
+    return map.entries.toList();
+  }
+
+  /// 밴드: '3G,4G : 3층 / 5G : 2층,3층' → 층별로 '3G,4G,5G : 3층 / 5G : 2층'
+  String floorLine(String key) => floorGroups(key).map((e) => '${e.value.join(',')} : ${e.key}').join(' / ');
+
+  /// 엑셀 통합국 F열: '3G,4G : 4층(JOIN UP) / 5G,사업자 : 3층(NOC)' (같은 층의 출입방법은 한 번만)
+  String floorExcelLine(String key) =>
+      floorGroups(key).map((e) => '${e.value.join(',')} : ${e.key}(${floorJoinOf(key, e.key)})').join(' / ');
+
+  /// 엑셀 F열 문구 → 기술별 층 목록 + 층별 출입방법
+  static ({Map<int, List<String>> floors, Map<String, String> join}) parseFloorLine(String line) {
+    final floors = <int, List<String>>{};
+    final join = <String, String>{};
+    for (final part in line.split('/')) {
+      final m = RegExp(r'^(.+?)\s*:\s*(.+?)\s*\((JOIN UP|NOC)\)\s*$').firstMatch(part.trim());
+      if (m == null) continue;
+      final f = m.group(2)!.trim();
+      join[f] = m.group(3)!;
+      for (final tg in m.group(1)!.split(',')) {
+        final ti = techs.indexOf(tg.trim());
+        if (ti >= 0) (floors[ti] ??= []).add(f);
+      }
+    }
+    return (floors: floors, join: join);
+  }
+
+  /// 층 버튼 누르기 (여러 층 선택 가능)
+  void toggleFloor(String key, int ti, String op) {
+    final cur = val('$key.$ti').split(',').map((x) => x.trim()).where((x) => x.isNotEmpty).toList();
+    final o = <String, String>{};
+    if (cur.contains(op)) {
+      cur.remove(op);
+      if (op == '기타') o['$key.$ti.e'] = '';
+    } else {
+      cur.add(op);
+    }
+    cur.sort((a, b) => floorOpts.indexOf(a) - floorOpts.indexOf(b));
+    o['$key.$ti'] = cur.join(',');
+    setVals(o);
+  }
+
+  /// 저장된 출입방법 값 지우기용 키들
+  Iterable<String> _joinKeys(String key) => values.keys.where((k) => k.startsWith('$key.j.')).toList();
 
   /// 중심국명 입력/선택 → 통합국에 국사정보가 있으면 층·출입방법 자동 채움
   void applyCenter(String name) {
@@ -539,22 +638,25 @@ class GaetongModel {
     }
     if (fk != null && hit != null && hit.floor.isNotEmpty) {
       final p = parseFloorLine(hit.floor);
-      const opts = ['1층', '2층', '3층', '4층', '5층', 'B1층'];
+      for (final jk in _joinKeys(fk)) {
+        o[jk] = '';
+      }
       for (var ti = 0; ti < 4; ti++) {
         final k = '$fk.$ti';
-        o[k] = '';
         o['$k.e'] = '';
         o['$k.t'] = '';
-        final x = p[ti];
-        if (x == null) continue;
-        if (opts.contains(x[0])) {
-          o[k] = x[0];
-        } else {
-          o[k] = '기타';
-          o['$k.e'] = x[0].replaceAll(RegExp(r'층$'), '');
+        final toks = <String>[];
+        for (final f in p.floors[ti] ?? const <String>[]) {
+          if (floorOpts.contains(f) && f != '기타') {
+            toks.add(f);
+          } else if (!toks.contains('기타')) {
+            toks.add('기타');
+            o['$k.e'] = f.replaceAll(RegExp(r'층$'), '');
+          }
         }
-        o['$k.t'] = x[1];
+        o[k] = toks.join(',');
       }
+      p.join.forEach((f, j) => o['$fk.j.$f'] = j);
       o['$fk.src'] = hit.floor;
       o['$fk.center'] = hit.name;
     } else if (fk != null && v('$fk.src').isNotEmpty) {
@@ -563,6 +665,9 @@ class GaetongModel {
         o['$fk.$ti'] = '';
         o['$fk.$ti.e'] = '';
         o['$fk.$ti.t'] = '';
+      }
+      for (final jk in _joinKeys(fk)) {
+        o[jk] = '';
       }
       o['$fk.src'] = '';
       o['$fk.center'] = '';
@@ -686,6 +791,8 @@ class GaetongModel {
       Usage('mux2fdf', 'MUX ~ 층간FDF', fl: 2, def: d('파', 'SC', '', 'LC', 'APC')),
       Usage('fdf2ofd', '층간FDF ~ 사업자OFD', fl: 3, def: d('파', 'SC', '', 'SC', '')),
       const Usage('ls', 'LS판넬 ~ DS판넬', fixed: true),
+      // MUX ~ LS판넬: (파) 16C LC/PC-LC/PC, 선번 없음
+      Usage('mux2ls', 'MUX ~ LS판넬', fl: 2, def: d('파', 'LC', 'PC', 'LC', 'PC', '16C')),
       if (it.lsh) const Usage('lsh', 'L-MUX ~ LSH', fl: 2, fixed: true),
       etc,
     ];
@@ -708,21 +815,30 @@ class GaetongModel {
     return ids.map((id) => MatEntry(id, '$key.$id.', id.startsWith('etc') ? 'etc' : id)).toList();
   }
 
+  static const _matFields = ['ut', 'edit', 'custom', 'kind', 'c', 'n', 'a', 'ap', 'b', 'bp', 'len', 'q', 'r'];
+
+  /// 사용처 고르기/빼기 — 뺐다가 다시 고르면 처음 기본값으로 (중간에 바꾸던 타입·길이 등은 지움)
   void matToggle(GItem it, String key, String id, bool on) {
     var sel = matSel(key).where((x) => x != id).toList();
     final o = <String, String>{};
+    void clear(String eid) {
+      for (final s in _matFields) {
+        o['$key.$eid.$s'] = '';
+      }
+    }
+
+    clear(id);
     if (on) {
       sel.add(id);
-      if (id == 'lsh') sel = sel.where((x) => x != 'ls').toList();
+      if (id == 'lsh' && sel.contains('ls')) {
+        sel = sel.where((x) => x != 'ls').toList();
+        clear('ls');
+      }
       final u = usageOf(it, id);
       final p = '$key.$id.';
-      if (u?.def != null && v('${p}c').isEmpty) u!.def!.forEach((s, x) => o['$p$s'] = x);
+      if (u?.def != null) u!.def!.forEach((s, x) => o['$p$s'] = x);
       // 자재 수량 기본 1 (중심국·리모트 공통)
-      if (v('${p}q').isEmpty) o['${p}q'] = '1';
-    } else if (id.startsWith('etc')) {
-      for (final s in ['ut', 'edit', 'custom', 'kind', 'c', 'n', 'a', 'ap', 'b', 'bp', 'len', 'q', 'r']) {
-        o['$key.$id.$s'] = '';
-      }
+      o['${p}q'] = '1';
     }
     o['$key.sel'] = sel.join(',');
     setVals(o);
@@ -787,12 +903,39 @@ class GaetongModel {
     return u.label.replaceAll(RegExp(r'\s*~\s*'), '~');
   }
 
-  /// (자재 항목, 그 키, 사용처 목록)
+  /// 중심국 선번이 필요한 끝점 (층간FDF·사업자OFD 등 FDF/OFD 만, DU·MHS·MUX·판넬·L9TU 는 없음)
+  ///   MUX~사업자OFD → [사업자OFD] / 층간FDF~사업자OFD → [층간FDF, 사업자OFD] / 리모트는 [''] (칸 1개)
+  List<String> sunEnds(GItem matIt, MatEntry en) {
+    if (matIt.remote) return const [''];
+    final u = usageOf(matIt, en.uid);
+    var label = (u == null || u.id == 'etc') ? v('${en.p}ut') : u.label;
+    if (u == null || u.id == 'etc') {
+      if (!label.contains('~')) return const [''];
+      label = label.replaceAll(RegExp(r'_[^_~]*층$'), '');
+    }
+    return label
+        .split(RegExp(r'\s*~\s*'))
+        .map((x) => x.trim())
+        .where((x) => x.contains('FDF') || x.contains('OFD'))
+        .toList();
+  }
+
+  /// (자재 항목, 그 키, 사용처 목록) — 선번이 필요 없는 사용처는 뺌
   ({GItem it, String key, List<MatEntry> entries})? sunSource(GItem sunIt) {
     final mx = itemOf(sunIt.sunFrom ?? '');
     if (mx == null) return null;
-    // LS판넬~DS판넬은 선번 필요 없음
-    return (it: mx.it, key: mx.key, entries: matEntries(mx.it, mx.key).where((en) => en.uid != 'ls' && etcKind(en).isEmpty).toList());
+    return (
+      it: mx.it,
+      key: mx.key,
+      entries: matEntries(mx.it, mx.key).where((en) => en.uid != 'ls' && etcKind(en).isEmpty && sunEnds(mx.it, en).isNotEmpty).toList()
+    );
+  }
+
+  /// 사용처 하나의 입력칸들: (끝점 이름, 값 키) — 끝점 1개면 '$key.<id>', 2개면 '.1' '.2'
+  List<(String, String)> sunSlots(GItem matIt, MatEntry en, String key) {
+    final ends = sunEnds(matIt, en);
+    if (ends.length <= 1) return [(ends.isEmpty ? '' : ends.first, '$key.${en.id}')];
+    return [for (var i = 0; i < ends.length; i++) (ends[i], '$key.${en.id}.${i + 1}')];
   }
 
   List<String> sunLines(GItem sunIt, String key) {
@@ -800,15 +943,24 @@ class GaetongModel {
     if (src == null) return [];
     final l = <String>[];
     for (final en in src.entries) {
-      final x = v('$key.${en.id}');
-      if (x.isNotEmpty) l.add('${sunLabel(src.it, en)} : $x');
+      final slots = sunSlots(src.it, en, key);
+      final lab = sunLabel(src.it, en);
+      if (slots.length == 1) {
+        final x = v(slots.first.$2);
+        if (x.isNotEmpty) l.add('$lab : $x');
+      } else {
+        final got = [for (final s in slots) if (v(s.$2).isNotEmpty) '${s.$1} : ${v(s.$2)}'];
+        if (got.isNotEmpty) l.addAll([lab, ...got]);
+      }
     }
     return l;
   }
 
   bool sunDone(GItem sunIt, String key) {
     final src = sunSource(sunIt);
-    return src != null && src.entries.isNotEmpty && src.entries.every((en) => v('$key.${en.id}').isNotEmpty);
+    return src != null &&
+        src.entries.isNotEmpty &&
+        src.entries.every((en) => sunSlots(src.it, en, key).every((s) => v(s.$2).isNotEmpty));
   }
 
   // ----- SFP 여러 개 (4G) -----
@@ -838,11 +990,147 @@ class GaetongModel {
       [for (var i = 1; i <= linkCount(key); i++) linkLine(key, i)].where((x) => x.isNotEmpty).toList();
 
   // ----- 다른 항목 줄을 자재내역 본문에 끼워 넣기 -----
+  // ------------------------------------------------------------
+  // DU
+  // ------------------------------------------------------------
+  List<DuPreset> duPresets() {
+    DuPreset c(String n, String sec, {bool real = true}) => DuPreset(n, len: true, real: real, sec: sec);
+    DuPreset q(String n) => DuPreset(n);
+    const ground = DuPreset('6SQ 접지', len: true, defLen: '0.2');
+    if (tpl.eq == 'WDU') {
+      return [
+        c('UTP', 'WDU ~ 전송랙', real: false),
+        q('RJ45'),
+        q('ㄷ자 가대'),
+        c('PCM케이블', 'WDU ~ QDF'),
+        DuPreset('QDF단자대', kinds: const ['1U', '2U', '4U'], nu: true, fmt: (k, s) => 'QDF단자대 $k'),
+        DuPreset('WDU~IP',
+            kinds: const ['(주)2C, SC/APC-LC/PC', '(주)2C, LC/PC-LC/PC'],
+            defKind: '(주)2C, SC/APC-LC/PC',
+            len: true,
+            fixedSec: 'WDU ~ IP',
+            fmt: (k, s) => k),
+        DuPreset('RF · IF',
+            kinds: const ['RF', 'IF'],
+            subs: const {'RF': ['단본', '3본'], 'IF': ['단본', '4본']},
+            len: true,
+            nu: true,
+            fmt: (k, s) => '$k $s'),
+        DuPreset('GPS분배기', kinds: const ['4WAY', '8WAY'], nu: true, fmt: (k, s) => 'GPS $k분배기'),
+        q('LC/LC OFD'),
+        const DuPreset('6SQ 접지', len: true, defLen: '1.5'),
+        q('SFP 1G 850nm'),
+      ];
+    }
+    if (tpl.eq == 'LTE DU') {
+      return [
+        q('채널카드 ㄷ자가대'), q('LC DDF판넬'), c('(적)12C다심, LC/PC-LC/PC', 'LTE DU랙 ~ DDF판넬'), c('24C다심, LC/PC-SC/APC', 'LTE DU랙 ~ MM용 층간FDF'),
+        c('SMART MPO다심', 'DU ~ S-DDF'), c('(주)2C, SC/APC-SC/APC', 'DU FDF ~ MM 층간FDF'), c('BIFS 4본', 'LTE DU ~ GPS 8WAY', real: false),
+        q('GPS 4WAY분배기'), q('GPS 8WAY분배기'), c('SRFS 단본', 'GPS 4WAY ~ GPS 8WAY', real: false), q('N TYPE아답터'), q('SMA아답터'), q('SMA/B'),
+        q('LC/LC OFD'), ground, q('SFP 1G 850nm'),
+      ];
+    }
+    return [c('5G 12C다심, LC/PC-LC/PC', '5G DUH ~ S-DDF'), ground, q('SFP 10G 1270/1330'), q('SFP 10G 1330/1270'), q('케이블 정리대')];
+  }
+
+  List<String> duSel(String key) => val('$key.sel').split(',').where((x) => x.isNotEmpty).toList();
+
+  List<DuEntry> duEntries(String key) {
+    final p = duPresets();
+    final out = <DuEntry>[];
+    for (final id in duSel(key)) {
+      if (id.startsWith('etc')) {
+        out.add(DuEntry(id, '$key.$id.', null));
+      } else {
+        final i = int.tryParse(id.substring(1)) ?? -1;
+        if (i >= 0 && i < p.length) out.add(DuEntry(id, '$key.$id.', p[i]));
+      }
+    }
+    return out;
+  }
+
+  /// 자재 고르기/빼기 — 빼면 입력값 지움, 고르면 수량 1·구간·길이·종류 기본값
+  void duToggle(String key, String id, bool on) {
+    final sel = duSel(key).where((x) => x != id).toList();
+    final p = '$key.$id.';
+    final o = <String, String>{for (final s in ['q', 'len', 'r', 'ut', 'nm', 'k', 'sb', 'nu']) '$p$s': ''};
+    if (on) {
+      sel.add(id);
+      o['${p}q'] = '1';
+      if (!id.startsWith('etc')) {
+        final pr = duPresets()[int.parse(id.substring(1))];
+        if (pr.sec != null && pr.sec!.isNotEmpty) o['${p}ut'] = pr.sec!;
+        if (pr.defLen != null) o['${p}len'] = pr.defLen!;
+        if (pr.defKind != null) o['${p}k'] = pr.defKind!;
+      }
+    }
+    o['$key.sel'] = sel.join(',');
+    setVals(o);
+  }
+
+  String duName(DuEntry en) {
+    final pr = en.pr;
+    if (pr == null) return v('${en.p}nm');
+    if (pr.kinds.isNotEmpty) {
+      final k = v('${en.p}k');
+      if (k.isEmpty) return '';
+      final sb = v('${en.p}sb');
+      if (pr.subs.isNotEmpty && sb.isEmpty) return '';
+      return pr.fmt != null ? pr.fmt!(k, sb) : k;
+    }
+    return pr.name;
+  }
+
+  String duLine(DuEntry en) {
+    if (v('${en.p}nu').isNotEmpty) return ''; // 미사용은 밴드에서 뺌
+    final nm = duName(en);
+    if (nm.isEmpty) return '';
+    final len = v('${en.p}len'), q = v('${en.p}q'), r = v('${en.p}r');
+    final ut = en.pr?.fixedSec ?? v('${en.p}ut');
+    final sec = ut.replaceAll(RegExp(r'\s*~\s*'), '~');
+    final lenTxt = len.isEmpty ? '' : ' ${len}M';
+    final qty = q.isEmpty ? '1' : q;
+    final realTxt = r.isEmpty ? '' : ' (${r}M)';
+    final secTxt = sec.isEmpty ? '' : ' [$sec]';
+    return '$nm$lenTxt×${qty}EA$realTxt$secTxt';
+  }
+
+  List<String> duLines(String key) => duEntries(key).map(duLine).where((x) => x.isNotEmpty).toList();
+
+  bool duEntryDone(DuEntry en) {
+    if (v('${en.p}nu').isNotEmpty) return true;
+    final pr = en.pr;
+    return duName(en).isNotEmpty && (pr == null || !pr.len || v('${en.p}len').isNotEmpty);
+  }
+
+  /// DU Blank·다심 정리Kit: 수량 직접 입력 / 미사용
+  String qtyNuFmt(String key) {
+    if (v('$key.nu').isNotEmpty) return '미사용';
+    final n = v(key).replaceAll(RegExp(r'EA$', caseSensitive: false), '');
+    return n.isEmpty ? '' : '${n}EA';
+  }
+
+  /// 건물 전체층 / 설치층
+  String bldgFmt(String key) {
+    String f(String s) {
+      var x = v('$key.$s');
+      if (x == '기타') {
+        x = v('$key.${s}e');
+        if (x.isNotEmpty && !x.endsWith('층')) x += '층';
+      }
+      return x;
+    }
+
+    final a = f('all'), b = f('at');
+    return (a.isEmpty && b.isEmpty) ? '' : '$a / $b';
+  }
+
   List<String> linesFrom(String? id) {
     if (id == null) return [];
     final mx = itemOf(id);
     if (mx == null) return [];
     if (mx.it.type == 'mats') return matLines(mx.it, mx.key);
+    if (mx.it.type == 'duMats') return duLines(mx.key);
     if (mx.it.id == 'shelf') return v(mx.key) == '사용' ? ['MUX SHELF×1EA'] : [];
     if (mx.it.type == 'att') return attLines(mx.key);
     if (mx.it.type == 'tray') {
@@ -871,7 +1159,12 @@ class GaetongModel {
       case 'tray':
       case 'memoRef':
       case 'sunU':
+      case 'duMats':
         return [];
+      case 'bldg':
+        return kv(it.label, bldgFmt(key));
+      case 'qtyNu':
+        return kv(it.label, qtyNuFmt(key));
       case 'sunbun': {
         // 자재내역(리모트) 다음 한 줄 띄우고 선번
         final l = <String>[];
@@ -984,6 +1277,14 @@ class GaetongModel {
         return matDone(it, key);
       case 'sunU':
         return sunDone(it, key);
+      case 'bldg':
+        return v('$key.all').isNotEmpty && v('$key.at').isNotEmpty;
+      case 'qtyNu':
+        return qtyNuFmt(key).isNotEmpty;
+      case 'duMats': {
+        final e = duEntries(key);
+        return e.isNotEmpty && e.every(duEntryDone);
+      }
       case 'sfpMulti':
         return sfpMultiFmt(it, key).isNotEmpty;
       case 'att':
@@ -1003,7 +1304,7 @@ class GaetongModel {
       case 'mux':
         return muxFmt(key).isNotEmpty;
       case 'sfpU':
-        return us.every((n) => sfpVal(key, n).isNotEmpty);
+        return us.every((n) => sfpDone(key, n));
       case 'alarmU': {
         // 미사용, 또는 고른 장비마다 길이/시설팀 포설
         if (alarmNone(key)) return true;
