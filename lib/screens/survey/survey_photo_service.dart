@@ -83,6 +83,32 @@ class SurveyPhotoService {
     return TakenPhoto(destPath, galleryError);
   }
 
+  /// 갤러리에서 고른 사진을 국소명 폴더(DCIM/F2개통/<국소명>/)에 한 장 더 저장 (원본은 그대로)
+  ///   카메라로 찍은 사진과 같은 이름 규칙 · stamp 가 있으면 위쪽에 항목 이름 띠
+  ///   돌려주는 값: null 이면 성공, 아니면 오류 내용
+  static Future<String?> copyToAlbum({
+    required String path,
+    required String station,
+    required String baseName,
+    required int number,
+    String? folder,
+    String? stamp,
+  }) async {
+    final stationSafe = safeName(station);
+    final name = '${stationSafe}_${safeName(baseName)}_${number.toString().padLeft(2, '0')}.jpg';
+    try {
+      await _channel.invokeMethod('saveImage', {
+        'path': path,
+        'album': '${folder ?? rootFolder}/$stationSafe',
+        'name': name,
+        'label': stamp ?? '',
+      });
+      return null;
+    } catch (e) {
+      return e.toString();
+    }
+  }
+
   /// [개통 센싱] 휴대폰 스크린샷 폴더를 바로 열어 여러 장 선택 → 앱 폴더로 복사
   ///   안드로이드 쪽 기능을 못 쓰면 일반 갤러리 선택으로 대신
   static Future<List<String>> pickScreenshots(String station) async {

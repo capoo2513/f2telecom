@@ -104,9 +104,12 @@ class GaetongDraftStore {
 // ============================================================
 class GaetongRecentStore {
   static const _key = 'gaetong_recent_v4';
-  static const _max = 30;
+  static const _max = 60;
 
-  static Future<List<GaetongDraft>> loadAll() async {
+  /// 완료한 개통(입력 내용 + 사진)을 보관하는 기간 — 지나면 목록과 앱 안 사진을 정리
+  static const keepDays = 14;
+
+  static Future<List<GaetongDraft>> _readAll() async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_key);
     if (raw == null || raw.isEmpty) return [];
@@ -120,23 +123,59 @@ class GaetongRecentStore {
     }
   }
 
+  /// 보관 기간이 남은 것만 (지난 것은 정리)
+  static Future<List<GaetongDraft>> loadAll() async {
+    final all = await _readAll();
+    final limit = DateTime.now().subtract(const Duration(days: keepDays));
+    final keep = all.where((d) => d.savedAt.isAfter(limit)).toList();
+    final gone = all.where((d) => !d.savedAt.isAfter(limit)).toList();
+    if (gone.isNotEmpty) {
+      await _writeAll(keep);
+      await _deletePhotos(gone, keep);
+    }
+    return keep;
+  }
+
   static Future<void> _writeAll(List<GaetongDraft> list) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_key, jsonEncode(list.map((d) => d.toJson()).toList()));
   }
 
+  /// 지워지는 기록의 앱 안 사진 파일 정리 (남은 기록·임시저장에서 쓰는 사진은 그대로)
+  /// 휴대폰 갤러리(DCIM)에 저장된 사진은 건드리지 않음
+  static Future<void> _deletePhotos(List<GaetongDraft> gone, List<GaetongDraft> keep) async {
+    try {
+      final used = <String>{
+        for (final d in keep) ...d.photos.values.expand((l) => l),
+        for (final d in await GaetongDraftStore.loadAll()) ...d.photos.values.expand((l) => l),
+      };
+      for (final d in gone) {
+        for (final path in d.photos.values.expand((l) => l)) {
+          if (used.contains(path)) continue;
+          final f = File(path);
+          if (await f.exists()) await f.delete();
+        }
+      }
+    } catch (_) {}
+  }
+
+  /// 밴드 올리기 완료한 개통 저장 (입력 내용 + 사진 목록)
   static Future<void> add(GaetongDraft d) async {
     final all = await loadAll();
     all.removeWhere((x) => x.id == d.id);
     all.insert(0, d);
-    if (all.length > _max) all.removeRange(_max, all.length);
+    final over = all.length > _max ? all.sublist(_max) : <GaetongDraft>[];
+    if (over.isNotEmpty) all.removeRange(_max, all.length);
     await _writeAll(all);
+    if (over.isNotEmpty) await _deletePhotos(over, all);
   }
 
   static Future<void> remove(String id) async {
     final all = await loadAll();
+    final gone = all.where((x) => x.id == id).toList();
     all.removeWhere((x) => x.id == id);
     await _writeAll(all);
+    await _deletePhotos(gone, all);
   }
 }
 

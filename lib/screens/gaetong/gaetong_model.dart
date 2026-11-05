@@ -344,6 +344,9 @@ class GaetongModel {
   List<CenterInfo> centers;
   final void Function() onChanged;
 
+  /// 사진이 붙어 있는지 (입력 화면이 알려줌) — 선번·중심국은 글과 사진이 둘 다 있어야 완료
+  bool Function(String photoKey)? hasPhoto;
+
   late final List<ItemKey> items = () {
     final out = <ItemKey>[];
     var n = 0;
@@ -815,7 +818,7 @@ class GaetongModel {
     return ids.map((id) => MatEntry(id, '$key.$id.', id.startsWith('etc') ? 'etc' : id)).toList();
   }
 
-  static const _matFields = ['ut', 'edit', 'custom', 'kind', 'c', 'n', 'a', 'ap', 'b', 'bp', 'len', 'q', 'r'];
+  static const _matFields = ['ut', 'edit', 'custom', 'kind', 'ex', 'c', 'n', 'a', 'ap', 'b', 'bp', 'len', 'q', 'r'];
 
   /// 사용처 고르기/빼기 — 뺐다가 다시 고르면 처음 기본값으로 (중간에 바꾸던 타입·길이 등은 지움)
   void matToggle(GItem it, String key, String id, bool on) {
@@ -860,6 +863,11 @@ class GaetongModel {
 
   String matLine(GItem it, MatEntry en) {
     final p = en.p;
+    // 기존 케이블 그대로 사용: '기존활용 [MUX~사업자OFD_3층]'
+    if (v('${p}ex').isNotEmpty) {
+      final use = matUsage(it, p, en.uid);
+      return use.isNotEmpty ? '기존활용 [$use]' : '기존활용';
+    }
     final kind = etcKind(en);
     if (kind.isNotEmpty) {
       final q = v('${p}q'), use = v('${p}ut');
@@ -879,6 +887,7 @@ class GaetongModel {
 
   /// 자재 하나 완료: 타입·길이·실거리·사용처 문구가 다 있어야 (수량은 기본 1)
   bool matEntryDone(GItem it, MatEntry en) {
+    if (v('${en.p}ex').isNotEmpty) return true; // 기존활용
     if (etcKind(en).isNotEmpty) return true;
     final u = usageOf(it, en.uid);
     if (u == null) return false;
@@ -956,11 +965,58 @@ class GaetongModel {
     return l;
   }
 
+  /// 선번 칸 하나 완료: 글 + (중심국은) 사진도 있어야
+  bool sunSlotDone(GItem sunIt, String slotKey) {
+    if (v(slotKey).isEmpty) return false;
+    if (sunIt.sunFrom == 'rmats') return true;
+    return hasPhoto?.call(slotKey) ?? true;
+  }
+
   bool sunDone(GItem sunIt, String key) {
     final src = sunSource(sunIt);
     return src != null &&
         src.entries.isNotEmpty &&
-        src.entries.every((en) => sunSlots(src.it, en, key).every((s) => v(s.$2).isNotEmpty));
+        src.entries.every((en) => sunSlots(src.it, en, key).every((s) => sunSlotDone(sunIt, s.$2)));
+  }
+
+  /// 밴드 미리보기 전에 확인: 선번·중심국에서 글이나 사진이 빠진 곳
+  List<String> sunMissing() {
+    final out = <String>[];
+    for (final x in items.where((y) => y.it.type == 'sunU' && y.it.sunFrom != 'rmats')) {
+      final src = sunSource(x.it);
+      if (src == null) continue;
+      for (final en in src.entries) {
+        final slots = sunSlots(src.it, en, x.key);
+        final lab = sunLabel(src.it, en);
+        for (final s in slots) {
+          final name = slots.length > 1 ? '$lab (${s.$1})' : lab;
+          final noText = v(s.$2).isEmpty, noPhoto = !(hasPhoto?.call(s.$2) ?? true);
+          if (noText && noPhoto) {
+            out.add('$name : 선번·사진 없음');
+          } else if (noText) {
+            out.add('$name : 선번 없음');
+          } else if (noPhoto) {
+            out.add('$name : 사진 없음');
+          }
+        }
+      }
+    }
+    return out;
+  }
+
+  /// [돌아가서 입력] 때 이동할 첫 칸: (값 키, 선번 글이 비었는지)
+  (String, bool)? sunFirstMissing() {
+    for (final x in items.where((y) => y.it.type == 'sunU' && y.it.sunFrom != 'rmats')) {
+      final src = sunSource(x.it);
+      if (src == null) continue;
+      for (final en in src.entries) {
+        for (final s in sunSlots(src.it, en, x.key)) {
+          final noText = v(s.$2).isEmpty, noPhoto = !(hasPhoto?.call(s.$2) ?? true);
+          if (noText || noPhoto) return (s.$2, noText);
+        }
+      }
+    }
+    return null;
   }
 
   // ----- SFP 여러 개 (4G) -----

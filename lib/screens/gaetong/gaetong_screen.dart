@@ -6,6 +6,8 @@ import 'package:intl/intl.dart';
 import '../survey/survey_camera_screen.dart';
 import '../survey/survey_photo_service.dart';
 import '../survey/survey_screen.dart' show SurveyPreviewScreen;
+import '../survey/record_list_sheet.dart';
+import '../survey/photo_viewer_page.dart';
 import 'gaetong_model.dart';
 import 'gaetong_store.dart';
 
@@ -21,7 +23,7 @@ const _sub = Color(0xFF5F6473);
 const _teal = Color(0xFF00695C);
 const _doneBg = Color(0xFFE3E6EB);
 const _doneBorder = Color(0xFFD0D4DC);
-const _buildMark = '개통 빌드 2026-10-28 #23';
+const _buildMark = '개통 빌드 2026-11-05 #31';
 const _sensingKey = 'sensing'; // 센싱 사진 (갤러리에서 여러 장, 글자 안 새김, 밴드에 맨 먼저)
 
 void _toast(BuildContext context, String msg) {
@@ -45,7 +47,6 @@ class _GaetongStartScreenState extends State<GaetongStartScreen> {
   int _tpl = -1;
   List<GaetongDraft> _drafts = [];
   List<GaetongDraft> _recent = [];
-  bool _recentOpen = false;
   List<CenterInfo> _centers = [];
   int _score = 0;
 
@@ -83,6 +84,52 @@ class _GaetongStartScreenState extends State<GaetongStartScreen> {
   Future<void> _reuse(GaetongDraft d) async {
     final tpl = _tplByName(d.tplName);
     if (tpl == null) return;
+    // 불러오기 방법: 본문만(국소명 새로) / 전체 내용(사진 포함, 완료 전 화면 그대로)
+    final how = await showDialog<String>(
+      context: context,
+      builder: (c) => SimpleDialog(
+        title: Text('${d.station.split('\n').first}\n${d.tplName} · ${DateFormat('M/d HH:mm').format(d.savedAt)} 완료'),
+        children: [
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(c, 'full'),
+            child: const ListTile(
+              leading: Icon(Icons.photo_library_outlined, color: _indigo),
+              title: Text('전체 내용 불러오기 (사진 포함)', style: TextStyle(fontWeight: FontWeight.bold)),
+              subtitle: Text('완료 전 화면 그대로 · 빠진 사진·내용을 고쳐서 다시 올릴 때'),
+            ),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(c, 'body'),
+            child: const ListTile(
+              leading: Icon(Icons.edit_note, color: _indigo),
+              title: Text('본문만 불러오기 (새 국소명)', style: TextStyle(fontWeight: FontWeight.bold)),
+              subtitle: Text('같은 장비 구성을 다른 국소에 쓸 때 · 사진은 새로'),
+            ),
+          ),
+          SimpleDialogOption(onPressed: () => Navigator.pop(c), child: const Text('취소', textAlign: TextAlign.right)),
+        ],
+      ),
+    );
+    if (how == null || !mounted) return;
+    if (how == 'full') {
+      final ex = await GaetongDraftStore.find(d.station, d.tplName);
+      if (ex != null && mounted) {
+        final ok = await showDialog<bool>(
+          context: context,
+          builder: (c) => AlertDialog(
+            title: const Text('같은 국소의 임시저장이 있어요'),
+            content: const Text('완료했던 내용으로 다시 열면 지금 임시저장된 내용은 바뀌어요. 계속할까요?'),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('취소')),
+              ElevatedButton(onPressed: () => Navigator.pop(c, true), child: const Text('완료 내용으로 열기')),
+            ],
+          ),
+        );
+        if (ok != true || !mounted) return;
+      }
+      setState(() => _tpl = _templates.indexOf(tpl));
+      return _open(tpl, d.station, Map.of(d.values), d.photos.map((k, v) => MapEntry(k, List.of(v))));
+    }
     final ctrl = TextEditingController();
     final st = await showDialog<String>(
       context: context,
@@ -112,9 +159,25 @@ class _GaetongStartScreenState extends State<GaetongStartScreen> {
     await _startWith(st, tpl, Map.of(d.values)..removeWhere((k, _) => k.endsWith('.open')));
   }
 
-  Future<void> _deleteRecent(GaetongDraft d) async {
+  // 완료 기록 삭제: 한 번 더 확인 (앱에 보관된 사진도 같이 지워짐)
+  Future<bool> _deleteRecent(GaetongDraft d) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('완료 기록 삭제'),
+        content: Text('${recordTitle(d.station)} · ${d.tplName}\n${DateFormat('M/d HH:mm').format(d.savedAt)} 완료 · 사진 ${d.photoCount}장\n\n'
+            '이 기록을 목록에서 지울까요?\n앱에 보관된 사진도 같이 지워져요. (휴대폰 갤러리 사진은 남아요)\n지우면 되돌릴 수 없어요.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('취소')),
+          TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('삭제', style: TextStyle(color: Colors.red))),
+        ],
+      ),
+    );
+    if (ok != true) return false;
     await GaetongRecentStore.remove(d.id);
-    _loadDrafts();
+    await _loadDrafts();
+    if (mounted) _toast(context, '완료 기록을 지웠어요');
+    return true;
   }
 
   GTemplate? _tplByName(String name) {
@@ -145,7 +208,8 @@ class _GaetongStartScreenState extends State<GaetongStartScreen> {
           values: values,
           photos: photos,
           centers: _centers,
-          canEditCenter: _score >= 3,
+          // 개통을 쓸 수 있는 사람(조회 이상)은 모두 국사정보 수정 가능 (2026-11-05)
+          canEditCenter: _score >= 2,
         ),
       ),
     );
@@ -195,21 +259,68 @@ class _GaetongStartScreenState extends State<GaetongStartScreen> {
     _open(tpl, st, values ?? GaetongModel.defaults(tpl), {});
   }
 
-  Future<void> _deleteDraft(GaetongDraft d) async {
+  Future<bool> _deleteDraft(GaetongDraft d) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (c) => AlertDialog(
         title: const Text('임시저장 삭제'),
-        content: Text('${d.station.split('\n').first} 의 임시저장을 지울까요?'),
+        content: Text('${recordTitle(d.station)} · ${d.tplName}\n${DateFormat('M/d HH:mm').format(d.savedAt)} 저장 · 사진 ${d.photoCount}장\n\n'
+            '이 임시저장을 지울까요?\n입력한 내용이 모두 지워지고 되돌릴 수 없어요. (휴대폰 갤러리 사진은 남아요)'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('취소')),
           TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('삭제', style: TextStyle(color: Colors.red))),
         ],
       ),
     );
-    if (ok != true) return;
+    if (ok != true) return false;
     await GaetongDraftStore.remove(d.id);
-    _loadDrafts();
+    await _loadDrafts();
+    if (mounted) _toast(context, '임시저장을 지웠어요');
+    return true;
+  }
+
+  // 목록 시트 (임시저장 / 완료한 개통)
+  void _showDrafts() {
+    showRecordListSheet(
+      context,
+      title: (n) => '임시저장된 개통 $n건',
+      sub: '최근 저장 순 · [이어서] 누르면 하던 곳부터',
+      color: const Color(0xFF8D5A00),
+      entries: [
+        for (final d in _drafts)
+          RecordEntry(
+            station: d.station,
+            sub: '${d.tplName} · ${DateFormat('M/d HH:mm').format(d.savedAt)} 저장 · 사진 ${d.photoCount}장',
+            at: d.savedAt,
+            action: '이어서',
+            onOpen: () async {
+              final t = _tplByName(d.tplName);
+              if (t != null) await _open(t, d.station, Map.of(d.values), d.photos.map((k, v) => MapEntry(k, List.of(v))));
+            },
+            onDelete: () => _deleteDraft(d),
+          ),
+      ],
+    );
+  }
+
+  void _showRecent() {
+    showRecordListSheet(
+      context,
+      title: (n) => '완료한 개통 $n건',
+      sub: '최근 완료 순 · ${GaetongRecentStore.keepDays}일 지나면 자동으로 지워져요',
+      color: _indigoDark,
+      entries: [
+        for (final d in _recent)
+          RecordEntry(
+            station: d.station,
+            sub: '${d.tplName} · ${DateFormat('M/d HH:mm').format(d.savedAt)} 완료 · 사진 ${d.photoCount}장',
+            at: d.savedAt,
+            action: '불러오기',
+            onOpen: () => _reuse(d),
+            onDelete: () => _deleteRecent(d),
+          ),
+      ],
+    );
   }
 
   Widget _kindButton(int i) {
@@ -256,103 +367,38 @@ class _GaetongStartScreenState extends State<GaetongStartScreen> {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
         children: [
-          if (_drafts.isNotEmpty)
-            Container(
-              margin: const EdgeInsets.only(bottom: 18),
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFFF8E1),
-                border: Border.all(color: const Color(0xFFFFD54F)),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('임시저장된 개통 ${_drafts.length}건',
-                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF8D5A00))),
-                for (final d in _drafts)
-                  Container(
-                    margin: const EdgeInsets.only(top: 6),
-                    padding: const EdgeInsets.fromLTRB(10, 6, 4, 6),
-                    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8)),
-                    child: Row(children: [
-                      Expanded(
-                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          Text(d.station.split('\n').first + (d.station.split('\n').length > 1 ? ' 외 ${d.station.split('\n').length - 1}' : ''),
-                              maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
-                          Text('${d.tplName} · ${DateFormat('M/d HH:mm').format(d.savedAt)} 저장 · 사진 ${d.photoCount}장',
-                              style: const TextStyle(fontSize: 12, color: _sub)),
-                        ]),
-                      ),
-                      ElevatedButton(
-                        onPressed: () {
-                          final t = _tplByName(d.tplName);
-                          if (t != null) _open(t, d.station, Map.of(d.values), d.photos.map((k, v) => MapEntry(k, List.of(v))));
-                        },
-                        style: ElevatedButton.styleFrom(backgroundColor: _indigo, foregroundColor: Colors.white),
-                        child: const Text('이어서'),
-                      ),
-                      IconButton(
-                        tooltip: '임시저장 삭제',
-                        icon: const Icon(Icons.delete_outline, color: Color(0xFFB71C1C)),
-                        onPressed: () => _deleteDraft(d),
-                      ),
-                    ]),
-                  ),
-              ]),
-            ),
-          if (_recent.isNotEmpty)
-            Container(
-              margin: const EdgeInsets.only(bottom: 18),
-              decoration: BoxDecoration(
-                color: const Color(0xFFE8EAF6),
-                border: Border.all(color: const Color(0xFFC5CAE9)),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                InkWell(
-                  borderRadius: BorderRadius.circular(12),
-                  onTap: () => setState(() => _recentOpen = !_recentOpen),
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
-                    child: Row(children: [
-                      const Icon(Icons.history, color: _indigoDark, size: 20),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text('최근 작성 ${_recent.length}건 · 불러와서 국소명만 바꿔 쓰기',
-                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: _indigoDark)),
-                      ),
-                      Icon(_recentOpen ? Icons.expand_less : Icons.expand_more, color: _indigoDark),
-                    ]),
-                  ),
-                ),
-                if (_recentOpen)
-                  for (final d in _recent)
-                    Container(
-                      margin: const EdgeInsets.fromLTRB(10, 0, 10, 6),
-                      padding: const EdgeInsets.fromLTRB(10, 6, 4, 6),
-                      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8)),
-                      child: Row(children: [
-                        Expanded(
-                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                            Text(d.station.split('\n').first + (d.station.split('\n').length > 1 ? ' 외 ${d.station.split('\n').length - 1}' : ''),
-                                maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
-                            Text('${d.tplName} · ${DateFormat('M/d HH:mm').format(d.savedAt)} 완료',
-                                style: const TextStyle(fontSize: 12, color: _sub)),
-                          ]),
-                        ),
-                        ElevatedButton(
-                          onPressed: () => _reuse(d),
-                          style: ElevatedButton.styleFrom(backgroundColor: _indigo, foregroundColor: Colors.white),
-                          child: const Text('불러오기'),
-                        ),
-                        IconButton(
-                          tooltip: '목록에서 지우기',
-                          icon: const Icon(Icons.close, color: _sub),
-                          onPressed: () => _deleteRecent(d),
-                        ),
-                      ]),
+          if (_drafts.isNotEmpty || _recent.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 18),
+              child: IntrinsicHeight(
+                child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                  Expanded(
+                    child: RecordCountButton(
+                      icon: Icons.save_outlined,
+                      label: '임시저장',
+                      count: _drafts.length,
+                      hint: '눌러서 이어서 하기 ›',
+                      bg: const Color(0xFFFFF8E1),
+                      border: const Color(0xFFFFD54F),
+                      fg: const Color(0xFF8D5A00),
+                      onTap: _showDrafts,
                     ),
-                if (_recentOpen) const SizedBox(height: 4),
-              ]),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: RecordCountButton(
+                      icon: Icons.check_circle_outline,
+                      label: '완료한 개통',
+                      count: _recent.length,
+                      hint: '${GaetongRecentStore.keepDays}일 보관 · 불러오기 ›',
+                      bg: const Color(0xFFE8EAF6),
+                      border: const Color(0xFFC5CAE9),
+                      fg: _indigoDark,
+                      onTap: _showRecent,
+                    ),
+                  ),
+                ]),
+              ),
             ),
           const Text('① 국소명', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
@@ -382,32 +428,32 @@ class _GaetongStartScreenState extends State<GaetongStartScreen> {
           const Text('DU', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: _teal)),
           const SizedBox(height: 6),
           grid(dus),
-          if (_tpl >= 0)
-            Container(
-              margin: const EdgeInsets.only(top: 14),
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                  color: Colors.white, border: Border.all(color: const Color(0xFFD5D8E2)), borderRadius: BorderRadius.circular(10)),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('${_templates[_tpl].name} 입력 항목', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 4),
-                Text(_templates[_tpl].sections.map((s) => s.title).join(' · '),
-                    style: const TextStyle(fontSize: 12, color: _sub, height: 1.6)),
-              ]),
-            ),
-          const SizedBox(height: 24),
-          SizedBox(
-            height: 52,
-            child: ElevatedButton(
-              onPressed: _start,
-              style: ElevatedButton.styleFrom(
-                  backgroundColor: _indigo, foregroundColor: Colors.white, shape: const StadiumBorder()),
-              child: const Text('개통 입력 시작', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
-            ),
-          ),
           const SizedBox(height: 16),
           const Center(child: Text(_buildMark, style: TextStyle(fontSize: 11, color: Colors.grey))),
         ],
+      ),
+      // 시작 버튼은 화면 맨 아래 고정 (스크롤 안 해도 보임) — 국소명·장비를 다 고르면 진한 색
+      bottomNavigationBar: Container(
+        padding: const EdgeInsets.all(10),
+        decoration: const BoxDecoration(color: Colors.white, border: Border(top: BorderSide(color: Color(0xFFE3E5EC)))),
+        child: ValueListenableBuilder<TextEditingValue>(
+          valueListenable: _stationCtrl,
+          builder: (_, v, __) {
+            final ready = _tpl >= 0 && v.text.trim().isNotEmpty;
+            return SizedBox(
+              height: 52,
+              child: ElevatedButton(
+                onPressed: _start,
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: ready ? _indigo : const Color(0xFF9FA8DA),
+                    foregroundColor: Colors.white,
+                    shape: const StadiumBorder()),
+                child: Text(_tpl >= 0 ? '${_templates[_tpl].name} 개통 입력 시작' : '개통 입력 시작',
+                    style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+              ),
+            );
+          },
+        ),
       ),
     );
   }
@@ -444,18 +490,60 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
   late final Map<String, String> _defaults = GaetongModel.defaults(widget.tpl);
   Timer? _saveTimer;
   bool _savingCenter = false;
+  // [돌아가서 입력] → 빠진 첫 칸으로 이동 + 주황 테두리 (3초)
+  final Map<String, GlobalKey> _jumpKeys = {};
+  String? _flashKey;
+  bool _flashText = false;
+  Timer? _flashTimer;
+  GlobalKey _jk(String k) => _jumpKeys.putIfAbsent(k, () => GlobalKey());
 
   @override
   void initState() {
     super.initState();
     m = GaetongModel(widget.tpl,
         station: widget.station, values: widget.values, centers: widget.centers, onChanged: _changed);
+    m.hasPhoto = (k) => (_photos[k] ?? const <String>[]).isNotEmpty;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _recalcDup());
   }
 
   @override
   void dispose() {
     _saveTimer?.cancel();
+    _flashTimer?.cancel();
     super.dispose();
+  }
+
+  void _jumpTo((String, bool) miss) {
+    setState(() {
+      _flashKey = miss.$1;
+      _flashText = miss.$2;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = _jumpKeys[miss.$1]?.currentContext;
+      if (ctx != null) {
+        Scrollable.ensureVisible(ctx, alignment: 0.25, duration: const Duration(milliseconds: 400), curve: Curves.easeOut);
+      }
+    });
+    _flashTimer?.cancel();
+    _flashTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _flashKey = null);
+    });
+  }
+
+  // 빠진 칸 표시: 주황 테두리
+  Widget _flashWrap(String k, Widget child) {
+    final on = _flashKey == k;
+    return AnimatedContainer(
+      key: _jk(k),
+      duration: const Duration(milliseconds: 250),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: on ? const Color(0xFFEF6C00) : Colors.transparent, width: 2),
+        color: on ? const Color(0xFFFFF3E0) : Colors.transparent,
+      ),
+      padding: const EdgeInsets.all(2),
+      child: child,
+    );
   }
 
   String get _draftId => GaetongDraftStore.makeId(widget.station, widget.tpl.name);
@@ -477,6 +565,44 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
     setState(() {});
     _saveTimer?.cancel();
     _saveTimer = Timer(const Duration(milliseconds: 600), _saveDraft);
+    _recalcDup();
+  }
+
+  // ---------------- 겹친 사진 표시 ----------------
+  // 같은 사진이 다른 칸에도 있으면 작은 사진에 '○○에도 있음', 같은 칸에 두 번이면 '중복' 표시
+  Map<String, String> _dupNote = {};
+  String _dupSnap = '';
+
+  Future<void> _recalcDup() async {
+    final all = <(String, String)>[for (final e in _photos.entries) for (final p in e.value) (e.key, p)];
+    final snap = all.map((x) => '${x.$1}|${x.$2}').join(',');
+    if (snap == _dupSnap) return;
+    _dupSnap = snap;
+    final groups = <String, List<(String, String)>>{};
+    final idsOf = <(String, String), List<String>>{};
+    for (final x in all) {
+      final sig = await _sig(x.$2);
+      final ids = [if (sig.isNotEmpty) 's:$sig', 'n:${_origName(x.$2)}'];
+      idsOf[x] = ids;
+      for (final id in ids) {
+        (groups[id] ??= []).add(x);
+      }
+    }
+    final note = <String, String>{};
+    for (final x in all) {
+      final others = <(String, String)>{
+        for (final id in idsOf[x]!) ...groups[id]!.where((o) => o != x),
+      };
+      if (others.isEmpty) continue;
+      if (others.any((o) => o.$1 == x.$1)) {
+        note[x.$2] = '중복';
+      } else {
+        note[x.$2] = '${_slotName(others.first.$1)}에도 있음';
+      }
+    }
+    if (!mounted || snap != _dupSnap) return;
+    final same = note.length == _dupNote.length && note.entries.every((e) => _dupNote[e.key] == e.value);
+    if (!same) setState(() => _dupNote = note);
   }
 
   Future<void> _saveDraft() async {
@@ -598,6 +724,30 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
     _saveTimer?.cancel();
     await _saveDraft();
     if (!mounted) return;
+    // 선번·중심국: 글과 사진이 둘 다 있어야 — 빠진 곳이 있으면 먼저 알려줌
+    final miss = m.sunMissing();
+    if (miss.isNotEmpty) {
+      final go = await showDialog<bool>(
+        context: context,
+        builder: (c) => AlertDialog(
+          title: const Text('선번 · 중심국을 확인하세요'),
+          content: SingleChildScrollView(
+            child: Text('선번 글과 사진이 둘 다 있어야 해요.\n\n${miss.map((x) => '• $x').join('\n')}'),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('그래도 미리보기')),
+            ElevatedButton(onPressed: () => Navigator.pop(c, false), child: const Text('돌아가서 입력')),
+          ],
+        ),
+      );
+      if (!mounted) return;
+      if (go == false) {
+        final first = m.sunFirstMissing();
+        if (first != null) _jumpTo(first);
+        return;
+      }
+      if (go != true) return;
+    }
     await Navigator.push(
       context,
       MaterialPageRoute(
@@ -606,9 +756,18 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
           body: m.buildBody(),
           photos: _allPhotos,
           photoLabels: _allLabels,
+          // 겹친 사진 표시 (미리보기 첨부 사진에도)
+          photoNotes: [for (final p in _allPhotos) _dupNote[p] ?? ''],
           draftId: '',
           kind: '개통',
           onCompleted: _onCompleted,
+          // 미리보기에서 뺀 사진은 입력 화면 목록에서도 뺌
+          onRemovePhoto: (path) {
+            for (final l in _photos.values) {
+              l.remove(path);
+            }
+            _changed();
+          },
         ),
       ),
     );
@@ -622,12 +781,13 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
     final isNew = fk == null || m.v('$fk.src').isEmpty;
     if (c != null && (isNew || widget.canEditCenter)) CenterService.saveFloor(c[0], c[1]).catchError((_) {});
     GaetongDraftStore.remove(_draftId);
-    // 최근 작성 목록에 남김 (다음에 국소명만 바꿔서 다시 쓰기용, 사진은 빼고)
+    // 최근 작성 목록에 남김 (입력 내용 + 사진, ${GaetongRecentStore.keepDays}일 보관)
+    //   → 국소명만 바꿔 새로 쓰기 / 사진까지 그대로 다시 열어 고쳐서 다시 올리기
     GaetongRecentStore.add(GaetongDraft(
       station: widget.station.trim(),
       tplName: widget.tpl.name,
       values: Map.of(m.values),
-      photos: const {},
+      photos: _photos.map((k, v) => MapEntry(k, List.of(v))),
       savedAt: DateTime.now(),
     ));
   }
@@ -653,45 +813,187 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
     _changed();
   }
 
-  Future<void> _pickPhotos(String key) async {
+  Future<void> _pickPhotos(String key, [String stamp = '']) async {
     try {
       final paths = await SurveyPhotoService.pickFromGallery(m.names.isNotEmpty ? m.names.first : widget.station);
       if (paths.isEmpty || !mounted) return;
-      (_photos[key] ??= []).addAll(paths);
+      final add = await _checkDuplicates(key, paths);
+      if (add == null || add.isEmpty || !mounted) return;
+      final before = _photos[key]?.length ?? 0;
+      final have = await _sigsExcept(add);
+      (_photos[key] ??= []).addAll(add);
       _changed();
+      await _copyToFolder(add, have, stamp.isEmpty ? '${widget.tpl.name}_개통' : '${widget.tpl.name}_$stamp', before + 1, stamp);
     } catch (e) {
       if (mounted) _toast(context, '사진 선택 오류: $e');
     }
   }
 
-  void _viewPhoto(String key, int idx) {
-    final path = _photos[key]![idx];
-    showDialog(
+  // 지금 칸들에 들어 있는 사진들의 지문 (새로 고른 것 빼고) — 이미 폴더에 복사된 사진은 또 복사 안 하려고
+  Future<Set<String>> _sigsExcept(List<String> add) async {
+    final out = <String>{};
+    for (final l in _photos.values) {
+      for (final p in l) {
+        if (add.contains(p)) continue;
+        final g = await _sig(p);
+        if (g.isNotEmpty) out.add(g);
+      }
+    }
+    return out;
+  }
+
+  // 갤러리에서 고른 사진을 국소명 폴더(DCIM/F2개통/<국소명>/)에 한 장 더 저장 (원본은 그대로)
+  //   카메라 사진과 같은 이름 규칙, stamp 가 있으면 위쪽에 항목 이름 띠
+  Future<void> _copyToFolder(List<String> add, Set<String> have, String baseName, int firstNo, String stamp) async {
+    final station = m.names.isNotEmpty ? m.names.first : widget.station;
+    var no = firstNo, copied = 0, skipped = 0, failed = 0;
+    for (final p in add) {
+      final n = no++;
+      final g = await _sig(p);
+      if (g.isNotEmpty && !have.add(g)) {
+        skipped++; // 이미 다른 칸에 넣어서 폴더에 있는 사진
+        continue;
+      }
+      final err = await SurveyPhotoService.copyToAlbum(
+          path: p, station: station, baseName: baseName, number: n, folder: 'F2개통', stamp: stamp.isEmpty ? null : stamp);
+      if (err == null) {
+        copied++;
+      } else {
+        failed++;
+      }
+    }
+    if (!mounted) return;
+    final folder = SurveyPhotoService.safeName(station);
+    _toast(
+        context,
+        failed > 0
+            ? '국소명 폴더 복사 $copied장 · 실패 $failed장 (사진은 앱에 들어갔어요)'
+            : copied > 0
+                ? '갤러리 F2개통/$folder 폴더에 $copied장 복사했어요${skipped > 0 ? ' (이미 있는 $skipped장 제외)' : ''}'
+                : '이미 국소명 폴더에 있는 사진이에요');
+  }
+
+  // ---------------- 갤러리 중복 확인 ----------------
+  // 갤러리에서 고른 사진이 이미 이 칸이나 다른 칸에 있으면 알려주고, 그래도 넣을지 물어봄
+  //  같은 사진 판단: 파일 크기 + 앞·뒤 일부 내용 (또는 같은 원래 파일 이름)
+  final Map<String, String> _sigCache = {};
+
+  Future<String> _sig(String path) async {
+    final hit = _sigCache[path];
+    if (hit != null) return hit;
+    var out = '';
+    try {
+      final f = File(path);
+      final len = await f.length();
+      final raf = await f.open();
+      const n = 16384;
+      final head = await raf.read(len < n ? len : n);
+      var tail = <int>[];
+      if (len > n * 2) {
+        await raf.setPosition(len - n);
+        tail = await raf.read(n);
+      }
+      await raf.close();
+      var h = 0x811c9dc5;
+      for (final b in [...head, ...tail]) {
+        h ^= b;
+        h = (h * 0x01000193) & 0xffffffff;
+      }
+      out = '$len-$h';
+    } catch (_) {}
+    _sigCache[path] = out;
+    return out;
+  }
+
+  /// 원래 파일 이름 (갤러리에서 가져올 때 붙인 'gallery_' 와 같은 이름 피하려 붙인 숫자는 뺌)
+  String _origName(String path) {
+    var n = path.split('/').last;
+    if (n.startsWith('gallery_')) n = n.substring(8);
+    return n.replaceAll(RegExp(r'_\d{13}(?=\.[^.]+$)'), '');
+  }
+
+  /// 사진 칸 이름 (알림에 보여줄 것)
+  String _slotName(String key) {
+    if (key == _sensingKey) return '센싱';
+    for (final s in _photoSlots()) {
+      if (s.$1 == key) {
+        if (s.$2.isNotEmpty) return s.$2;
+        break;
+      }
+    }
+    for (final x in m.items) {
+      if (x.key == key) return x.it.label;
+    }
+    return '다른 칸';
+  }
+
+  /// 고른 사진 중 이미 있는 것 확인 → 넣을 사진 목록 (null = 취소)
+  Future<List<String>?> _checkDuplicates(String key, List<String> picked) async {
+    final dupAt = <String, String>{}; // 고른 사진 → 이미 있는 칸
+    final existing = <(String, String)>[for (final e in _photos.entries) for (final p in e.value) (e.key, p)];
+    for (final p in picked) {
+      final sig = await _sig(p), name = _origName(p);
+      for (final ex in existing) {
+        if (ex.$2 == p) continue;
+        if ((sig.isNotEmpty && sig == await _sig(ex.$2)) || name == _origName(ex.$2)) {
+          dupAt[p] = ex.$1;
+          break;
+        }
+      }
+    }
+    if (dupAt.isEmpty || !mounted) return picked;
+    final count = <String, int>{};
+    for (final k in dupAt.values) {
+      count[k] = (count[k] ?? 0) + 1;
+    }
+    final lines = [
+      for (final e in count.entries) '• ${e.key == key ? '이 칸 (${_slotName(key)})' : _slotName(e.key)} : ${e.value}장',
+    ];
+    final fresh = picked.where((p) => !dupAt.containsKey(p)).toList();
+    final c = await showDialog<String>(
       context: context,
-      builder: (c) => Dialog(
-        insetPadding: const EdgeInsets.all(10),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Flexible(child: InteractiveViewer(child: Image.file(File(path)))),
-          Padding(padding: const EdgeInsets.all(6), child: Text(path.split('/').last, style: const TextStyle(fontSize: 12, color: Colors.grey))),
-          Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-            TextButton(
-              onPressed: () {
-                Navigator.pop(c);
-                _photos[key]!.removeAt(idx);
-                _changed();
-              },
-              child: const Text('목록에서 빼기', style: TextStyle(color: Colors.red)),
-            ),
-            TextButton(onPressed: () => Navigator.pop(c), child: const Text('닫기')),
-          ]),
-        ]),
+      builder: (c) => AlertDialog(
+        title: Text('이미 넣은 사진 ${dupAt.length}장이 있어요'),
+        content: Text('고른 ${picked.length}장 중 ${dupAt.length}장은 이미 아래 칸에 들어 있어요.\n\n${lines.join('\n')}\n\n그래도 추가할까요?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, 'cancel'), child: const Text('취소')),
+          TextButton(onPressed: () => Navigator.pop(c, 'all'), child: const Text('그래도 모두 추가')),
+          if (fresh.isNotEmpty)
+            ElevatedButton(onPressed: () => Navigator.pop(c, 'fresh'), child: Text('겹치는 것 빼고 ${fresh.length}장 추가')),
+        ],
       ),
+    );
+    final add = c == 'all' ? picked : (c == 'fresh' ? fresh : <String>[]);
+    // 안 넣는 사진은 앱 안 사본 정리
+    for (final p in picked.where((x) => !add.contains(x))) {
+      try {
+        await File(p).delete();
+      } catch (_) {}
+    }
+    return c == null || c == 'cancel' ? null : add;
+  }
+
+  // 작은 사진을 누르면 크게 보기 (좌우로 넘기기 · 확대 · 빼기) — 실사·밴드 미리보기와 같은 화면
+  void _viewPhoto(String key, int idx) {
+    final list = _photos[key];
+    if (list == null || list.isEmpty) return;
+    PhotoViewerPage.open(
+      context,
+      photos: list,
+      start: idx,
+      title: _slotName(key),
+      noteOf: (i) => i < list.length ? (_dupNote[list[i]] ?? '') : '',
+      removeMessage: '이 칸의 사진 목록에서 빠지고, 밴드에도 안 올라가요.\n(휴대폰 갤러리에 저장된 사진은 그대로예요)',
+      onRemove: (i) {
+        list.removeAt(i);
+        _changed();
+      },
     );
   }
 
-  // 카메라·갤러리 버튼 (+ 찍은 장수)
+
+  // 카메라·갤러리 버튼 (장수 표시 없이 — 넣은 사진은 바로 아래 작은 사진으로 보임)
   Widget _photoBtns(String key, String stamp, {bool compact = false}) {
-    final n = _photos[key]?.length ?? 0;
     if (compact) {
       // 칸 제목 아래 오른쪽 빈자리에 들어가는 작은 버튼
       Widget ib(IconData ic, String tip, VoidCallback f) => SizedBox(
@@ -700,23 +1002,11 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
             child: IconButton(padding: EdgeInsets.zero, iconSize: 21, tooltip: tip, icon: Icon(ic, color: _indigo), onPressed: f),
           );
       return Row(mainAxisSize: MainAxisSize.min, children: [
-        if (n > 0)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-            decoration: BoxDecoration(color: const Color(0xFFE8F5E9), borderRadius: BorderRadius.circular(10)),
-            child: Text('$n장', style: const TextStyle(fontSize: 11, color: Color(0xFF2E7D32), fontWeight: FontWeight.bold)),
-          ),
         ib(Icons.photo_camera_outlined, '카메라 촬영', () => _takePhotos(key, stamp, stamp: stamp)),
-        ib(Icons.photo_library_outlined, '갤러리에서 선택', () => _pickPhotos(key)),
+        ib(Icons.photo_library_outlined, '갤러리에서 선택', () => _pickPhotos(key, stamp)),
       ]);
     }
     return Row(mainAxisSize: MainAxisSize.min, children: [
-      if (n > 0)
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-          decoration: BoxDecoration(color: const Color(0xFFE8F5E9), borderRadius: BorderRadius.circular(10)),
-          child: Text('$n장', style: const TextStyle(fontSize: 12, color: Color(0xFF2E7D32), fontWeight: FontWeight.bold)),
-        ),
       IconButton(
           visualDensity: VisualDensity.compact,
           tooltip: '카메라 촬영',
@@ -726,7 +1016,7 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
           visualDensity: VisualDensity.compact,
           tooltip: '갤러리에서 선택',
           icon: const Icon(Icons.photo_library_outlined, color: _indigo),
-          onPressed: () => _pickPhotos(key)),
+          onPressed: () => _pickPhotos(key, stamp)),
     ]);
   }
 
@@ -742,8 +1032,6 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
           Icon(Icons.circle, size: 8, color: list.isNotEmpty ? const Color(0xFF2E7D32) : const Color(0xFFB0B4C0)),
           const SizedBox(width: 6),
           const Expanded(child: Text('센싱', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold))),
-          if (list.isNotEmpty)
-            Text('${list.length}장', style: const TextStyle(fontSize: 12, color: Color(0xFF2E7D32), fontWeight: FontWeight.bold)),
           IconButton(
             tooltip: '갤러리에서 선택',
             icon: const Icon(Icons.photo_library_outlined, color: _indigo),
@@ -759,8 +1047,13 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
     try {
       final paths = await SurveyPhotoService.pickFromGallery(m.names.isNotEmpty ? m.names.first : widget.station);
       if (paths.isEmpty || !mounted) return;
-      (_photos[_sensingKey] ??= []).addAll(paths);
+      final add = await _checkDuplicates(_sensingKey, paths);
+      if (add == null || add.isEmpty || !mounted) return;
+      final before = _photos[_sensingKey]?.length ?? 0;
+      final have = await _sigsExcept(add);
+      (_photos[_sensingKey] ??= []).addAll(add);
       _changed();
+      await _copyToFolder(add, have, '${widget.tpl.name}_센싱', before + 1, ''); // 센싱은 글자 없이
     } catch (e) {
       if (mounted) _toast(context, '사진 선택 오류: $e');
     }
@@ -777,13 +1070,40 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
         scrollDirection: Axis.horizontal,
         itemCount: list.length,
         separatorBuilder: (_, __) => const SizedBox(width: 6),
-        itemBuilder: (_, i) => GestureDetector(
-          onTap: () => _viewPhoto(key, i),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(6),
-            child: Image.file(File(list[i]), width: 60, height: 60, fit: BoxFit.cover, cacheWidth: 160),
-          ),
-        ),
+        itemBuilder: (_, i) {
+          final note = _dupNote[list[i]];
+          final col = note == null ? null : (note == '중복' ? const Color(0xFFD32F2F) : const Color(0xFFEF6C00));
+          return GestureDetector(
+            onTap: () => _viewPhoto(key, i),
+            child: Container(
+              width: 60,
+              height: 60,
+              decoration: col == null ? null : BoxDecoration(border: Border.all(color: col, width: 3), borderRadius: BorderRadius.circular(8)),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: Stack(fit: StackFit.expand, children: [
+                  Image.file(File(list[i]), fit: BoxFit.cover, cacheWidth: 160),
+                  // 겹친 사진 표시: 다른 칸에도 있으면 주황, 같은 칸에 두 번이면 빨강
+                  if (note != null)
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      child: Container(
+                        color: col!.withValues(alpha: 0.85),
+                        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 1),
+                        child: Text(note,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold, height: 1.1)),
+                      ),
+                    ),
+                ]),
+              ),
+            ),
+          );
+        },
       ),
     );
   }
@@ -1356,7 +1676,7 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
               ];
           final last = i == cnt && cnt > 1;
           rf.rows.add(_row([
-            ..._chipsFor('${p}mk', ['동아', 'UNA', 'PCNI']),
+            ..._chipsFor('${p}mk', widget.tpl.eq == 'RRU' ? ['동아', 'UNA', 'PCNI', '우리', '에어텍'] : ['동아', 'UNA', 'PCNI']),
             _br(), _txt('M', 'head'), ...msChips('${p}m'),
             if (m.v('${p}m') == '기타') _inp('${p}me', 'M 내용', width: 80),
             _br(), _txt('S', 'head'), ...msChips('${p}s'),
@@ -1395,34 +1715,43 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
           final slots = m.sunSlots(src.it, en, key);
           Widget input(String k) => SizedBox(
                 width: double.infinity,
-                child: _SyncInput(key: ValueKey('in:$k'), value: m.val(k), hint: '예: R5-2_OFD#1(2F~3F)_S11_57P', onChanged: (s) => m.setVal(k, s)),
+                child: _SyncInput(
+                    key: ValueKey('in:$k'),
+                    value: m.val(k),
+                    hint: '예: R5-2_OFD#1(2F~3F)_S11_57P',
+                    focusNow: _flashKey == k && _flashText,
+                    onChanged: (s) => m.setVal(k, s)),
               );
           if (slots.length == 1) {
             final k = slots.first.$2;
-            rf.rows.add(_row([
+            rf.rows.add(_flashWrap(k, _row([
               input(k),
               if ((_photos[k] ?? const []).isNotEmpty) _thumbs(k),
-            ], title: lab, trailing: _photoBtns(k, _sunStamp(it, lab)), done: m.v(k).isNotEmpty));
+            ], title: lab, trailing: _photoBtns(k, _sunStamp(it, lab)), done: m.sunSlotDone(it, k))));
           } else {
             // 층간FDF~사업자OFD 처럼 양쪽 다 선번이 있으면 칸 2개 (각각 사진)
             rf.rows.add(_row([
-              for (final sl in slots) ...[
+              for (final sl in slots)
                 SizedBox(
                   width: double.infinity,
-                  child: Row(children: [
-                    Expanded(child: Text(sl.$1, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: _indigoDark))),
-                    _photoBtns(sl.$2, _sunStamp(it, '$lab (${sl.$1})'), compact: true),
-                  ]),
+                  child: _flashWrap(
+                    sl.$2,
+                    Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Row(children: [
+                        Expanded(child: Text(sl.$1, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: _indigoDark))),
+                        _photoBtns(sl.$2, _sunStamp(it, '$lab (${sl.$1})'), compact: true),
+                      ]),
+                      input(sl.$2),
+                      if ((_photos[sl.$2] ?? const []).isNotEmpty) ...[const SizedBox(height: 6), _thumbs(sl.$2)],
+                    ]),
+                  ),
                 ),
-                input(sl.$2),
-                if ((_photos[sl.$2] ?? const []).isNotEmpty) _thumbs(sl.$2),
-              ],
-            ], title: lab, done: slots.every((sl) => m.v(sl.$2).isNotEmpty)));
+            ], title: lab, done: slots.every((sl) => m.sunSlotDone(it, sl.$2))));
           }
         }
         rf.note = it.sunFrom == 'rmats'
             ? '사진 위쪽에 사용처 이름이 새겨져요 (갤러리 저장본·밴드)'
-            : 'DU·MHS·MUX·판넬 쪽은 선번이 없어서 층간FDF·사업자OFD 쪽만 칸이 생겨요';
+            : '선번 글과 사진이 둘 다 있어야 완료 · DU·MHS·MUX·판넬 쪽은 선번이 없어서 층간FDF·사업자OFD 쪽만 칸이 생겨요';
         rf.preview = m.sunLines(it, key).join('\n');
         break;
       }
@@ -1476,8 +1805,14 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
           return c;
         }
       }
+      // 중심국: 케이블을 그대로 쓰면 [기존활용] → 타입·길이 입력 없이 완료, 밴드에 '기존활용'
+      if (!it.remote && m.v('${p}ex').isNotEmpty) {
+        c.addAll([_br(), _chip('기존활용', true, () => m.setVal('${p}ex', ''), rect: true), _txt('타입·길이 없이 "기존활용"으로 올라가요', 'hint')]);
+        return c;
+      }
+      final exChip = it.remote ? null : _chip('기존활용', false, () => m.setVal('${p}ex', '1'), rect: true);
       if (u.fixed) {
-        c.addAll([_br(), _txt('(파) 2C LC/PC-LC/PC 고정', 'badge')]);
+        c.addAll([_br(), _txt('(파) 2C LC/PC-LC/PC 고정', 'badge'), if (exChip != null) exChip]);
       } else if ((u.def != null || u.rdef) && m.v('${p}edit').isEmpty) {
         final head = m.matHead(p, u);
         c.addAll([
@@ -1491,9 +1826,11 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
             }
             m.setVals(o);
           }),
+          if (exChip != null) exChip,
         ]);
       } else {
         if (u.def != null || u.rdef) c.addAll([_br(), _chip('변경 완료', true, () => m.setVal('${p}edit', ''))]);
+        if (exChip != null) c.addAll([if (u.def == null && !u.rdef) _br(), exChip]);
         final colors = it.remote
             ? [['외', '(외)'], ['적외', '(적)(외)'], ['파', '(파)'], ['노', '(노)']]
             : [['파', '파랑 (파)'], ['노', '노랑 (노)'], ['주', '주황 (주)']];
@@ -1578,28 +1915,31 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
             : ['모국명에 중심국을 입력하면, 저장된 국사정보는 자동으로 불러와요', 'hint'];
     rf.rows.add(_row([_txt(st[0], st[1])]));
 
-    // 기술마다 층을 여러 개 고를 수 있음 (두 층에 나눠 있을 때)
+    // 기술마다 층을 여러 개 고를 수 있음 / 고른 층의 JOIN UP·NOC 는 기술 이름 옆에 바로
+    //   (출입방법은 층마다 하나라서, 같은 층을 쓰는 다른 기술 칸에도 같이 바뀜)
     for (var ti = 0; ti < 4; ti++) {
       final k = '$key.$ti';
       final sel = m.val(k).split(',').map((x) => x.trim()).where((x) => x.isNotEmpty).toList();
+      final floors = m.floorsAt(key, ti);
       final tg = GaetongModel.techs[ti];
       rf.rows.add(_row([
+        SizedBox(
+          width: 48,
+          child: Text(tg, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: _teal)),
+        ),
+        for (final f in floors) ...[
+          if (floors.length > 1)
+            Padding(
+              padding: const EdgeInsets.only(left: 4),
+              child: Text(f, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: _indigoDark)),
+            ),
+          for (final op in ['JOIN UP', 'NOC'])
+            _chip(op, m.floorJoinOf(key, f) == op, () => m.setVal('$key.j.$f', op), rect: true, join: true),
+        ],
+        _br(),
         for (final op in GaetongModel.floorOpts) _chip(op, sel.contains(op), () => m.toggleFloor(key, ti, op)),
         if (sel.contains('기타')) _inp('$k.e', '예: B2', width: 80),
-      ], title: '$tg  (여러 층 가능)', done: sel.isNotEmpty, bg: const Color(0xFFFAFBFD)));
-    }
-    // 출입방법: 층마다 한 번 (같은 층을 여러 기술이 써도 한 번만)
-    final groups = m.floorGroups(key);
-    if (groups.isNotEmpty) {
-      rf.rows.add(_row([
-        for (final g in groups) ...[
-          _br(),
-          SizedBox(width: 64, child: Text(g.key, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: _teal))),
-          for (final op in ['JOIN UP', 'NOC'])
-            _chip(op, m.floorJoinOf(key, g.key) == op, () => m.setVal('$key.j.${g.key}', op), rect: true, join: true),
-          _txt(g.value.join(','), 'hint'),
-        ],
-      ], title: '출입방법 (층마다 한 번)', bg: _doneBg, border: _doneBorder));
+      ], done: sel.isNotEmpty, bg: const Color(0xFFFAFBFD)));
     }
     // [국사정보 수정] : 개통 완료를 기다리지 않고 바로 통합국 F열로 (엑셀에서는 바뀐 칸이 빨간 글씨)
     if (center.isNotEmpty && xl.isNotEmpty && xl != src && src.isNotEmpty && !widget.canEditCenter) {
@@ -1687,26 +2027,10 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
               Icon(Icons.circle, size: 8, color: list.isNotEmpty ? const Color(0xFF2E7D32) : const Color(0xFFB0B4C0)),
               const SizedBox(width: 6),
               Expanded(child: Text(it.label, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold))),
-              if (list.isNotEmpty) Text('${list.length}장', style: const TextStyle(fontSize: 12, color: Color(0xFF2E7D32), fontWeight: FontWeight.bold)),
               IconButton(tooltip: '카메라 촬영', icon: const Icon(Icons.photo_camera_outlined, color: _indigo), onPressed: () => _takePhotos(key, it.label)),
               IconButton(tooltip: '갤러리에서 선택', icon: const Icon(Icons.photo_library_outlined, color: _indigo), onPressed: () => _pickPhotos(key)),
             ]),
-            if (list.isNotEmpty)
-              SizedBox(
-                height: 64,
-                child: ListView.separated(
-                  scrollDirection: Axis.horizontal,
-                  itemCount: list.length,
-                  separatorBuilder: (_, __) => const SizedBox(width: 6),
-                  itemBuilder: (_, i) => GestureDetector(
-                    onTap: () => _viewPhoto(key, i),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(6),
-                      child: Image.file(File(list[i]), width: 60, height: 60, fit: BoxFit.cover, cacheWidth: 160),
-                    ),
-                  ),
-                ),
-              ),
+            if (list.isNotEmpty) _thumbs(key),
           ]),
         );
       default:
@@ -1791,16 +2115,24 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
         // 센싱·카메라·갤러리 버튼은 제목 아래 오른쪽 빈자리에 (긴 제목이 잘리지 않게)
         Stack(children: [
           Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            ...fields,
+            // 칸 사진: 제목 바로 아래 (카메라·갤러리 버튼과 같은 줄) → 넣자마자 그 자리에서 보임
             if (sec.photo && (_photos[_secKey(sec)] ?? const []).isNotEmpty)
-              Padding(
+              Container(
+                margin: const EdgeInsets.only(bottom: 8),
                 padding: const EdgeInsets.only(bottom: 8),
+                decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Color(0xFFDDE0E8)))),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text('${sec.title} 사진', style: const TextStyle(fontSize: 12, color: _teal, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 4),
+                  SizedBox(
+                    height: 32,
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text('${sec.title} 사진', style: const TextStyle(fontSize: 13, color: _teal, fontWeight: FontWeight.bold)),
+                    ),
+                  ),
                   _thumbs(_secKey(sec)),
                 ]),
               ),
+            ...fields,
           ]),
           if (hasBtns)
             Positioned(
@@ -1850,6 +2182,8 @@ class _GaetongFormScreenState extends State<GaetongFormScreen> {
           onTap: () => FocusScope.of(context).unfocus(),
           child: ListView(
             padding: const EdgeInsets.fromLTRB(10, 10, 10, 16),
+            // 화면 밖 칸도 미리 만들어 둠 → [돌아가서 입력] 때 빠진 칸으로 바로 이동
+            cacheExtent: 100000,
             children: [for (var si = 0; si < widget.tpl.sections.length; si++) _section(si)],
           ),
         ),
@@ -1888,6 +2222,7 @@ class _SyncInput extends StatefulWidget {
   final bool numeric;
   final bool multiline;
   final bool center;
+  final bool focusNow; // true 가 되는 순간 입력 커서를 넣음 (빠진 칸으로 이동)
   final ValueChanged<String> onChanged;
 
   const _SyncInput({
@@ -1898,6 +2233,7 @@ class _SyncInput extends StatefulWidget {
     this.numeric = false,
     this.multiline = false,
     this.center = false,
+    this.focusNow = false,
   });
 
   @override
@@ -1912,6 +2248,11 @@ class _SyncInputState extends State<_SyncInput> {
   void didUpdateWidget(covariant _SyncInput old) {
     super.didUpdateWidget(old);
     if (!_f.hasFocus && _c.text != widget.value) _c.text = widget.value;
+    if (widget.focusNow && !old.focusNow) {
+      Future.delayed(const Duration(milliseconds: 450), () {
+        if (mounted) _f.requestFocus();
+      });
+    }
   }
 
   @override

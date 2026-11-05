@@ -38,6 +38,12 @@ class MyApp extends StatelessWidget {
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
+      // 휴대폰 아래 홈·뒤로가기 버튼(내비게이션 바) 자리를 피해서 모든 화면·목록창·대화상자를 그 위에 그림
+      //  (안드로이드 15부터 앱이 화면 맨 아래까지 그려져서 아래쪽 버튼·목록이 가려지던 문제)
+      builder: (context, child) => ColoredBox(
+        color: Colors.white,
+        child: SafeArea(top: false, left: false, right: false, child: child ?? const SizedBox()),
+      ),
       home: const SplashScreen(),
     );
   }

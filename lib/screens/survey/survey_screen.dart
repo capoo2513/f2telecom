@@ -11,6 +11,8 @@ import 'survey_templates.dart';
 import 'survey_photo_service.dart';
 import 'survey_camera_screen.dart';
 import 'survey_draft_store.dart';
+import 'record_list_sheet.dart';
+import 'photo_viewer_page.dart';
 import '../gaetong/gaetong_store.dart' show CenterService;
 
 const _bandGreen = Color(0xFF00A032);
@@ -188,12 +190,15 @@ class _SurveyStartScreenState extends State<SurveyStartScreen> {
     }
   }
 
-  Future<void> _deleteDraft(SurveyDraft d) async {
+  Future<bool> _deleteDraft(SurveyDraft d) async {
+    final t = templateById(d.templateId);
     final ok = await showDialog<bool>(
       context: context,
       builder: (c) => AlertDialog(
         title: const Text('임시저장 삭제'),
-        content: Text('${d.station} 의 임시저장을 지울까요?\n(휴대폰에 저장된 사진은 남아있습니다)'),
+        content: Text('${_shortStation(d.station)} · ${t?.name ?? d.templateId}${d.floor.isNotEmpty ? ' · ${d.floor}층' : ''}\n'
+            '${DateFormat('M/d HH:mm').format(d.savedAt)} 저장 · 사진 ${d.photoCount}장\n\n'
+            '이 임시저장을 지울까요?\n입력한 내용이 모두 지워지고 되돌릴 수 없어요. (휴대폰 갤러리 사진은 남아요)'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(c, false),
@@ -204,10 +209,40 @@ class _SurveyStartScreenState extends State<SurveyStartScreen> {
         ],
       ),
     );
-    if (ok == true) {
-      await SurveyDraftStore.remove(d.id);
-      _loadDrafts();
+    if (ok != true) return false;
+    await SurveyDraftStore.remove(d.id);
+    await _loadDrafts();
+    if (mounted) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('임시저장을 지웠어요')));
     }
+    return true;
+  }
+
+  // 임시저장 목록: 버튼을 누르면 아래에서 올라옴 (국소명 검색, 최근 순, 날짜별)
+  void _showDrafts() {
+    showRecordListSheet(
+      context,
+      title: (n) => '임시저장된 실사 $n건',
+      sub: '최근 저장 순 · [이어서] 누르면 하던 곳부터',
+      color: Colors.brown.shade700,
+      entries: [
+        for (final d in _drafts)
+          RecordEntry(
+            station: d.station,
+            sub: '${templateById(d.templateId)?.name ?? d.templateId}${d.floor.isNotEmpty ? ' · ${d.floor}층' : ''} · '
+                '${DateFormat('M/d HH:mm').format(d.savedAt)} 저장 · 사진 ${d.photoCount}장',
+            at: d.savedAt,
+            action: '이어서',
+            onOpen: () async {
+              final t = templateById(d.templateId);
+              if (t != null) await _openForm(t, d.station, d.floor, d);
+            },
+            onDelete: () => _deleteDraft(d),
+          ),
+      ],
+    );
   }
 
   // 실사 종류 버튼 [id, 이름, 안내]
@@ -235,59 +270,48 @@ class _SurveyStartScreenState extends State<SurveyStartScreen> {
         backgroundColor: Colors.indigo,
         foregroundColor: Colors.white,
       ),
+      // 시작 버튼은 화면 맨 아래 고정 (스크롤 안 해도 보임) — 국소명·구분을 다 고르면 진한 색
+      bottomNavigationBar: Container(
+        padding: const EdgeInsets.all(10),
+        decoration: const BoxDecoration(color: Colors.white, border: Border(top: BorderSide(color: Color(0xFFE3E5EC)))),
+        child: ValueListenableBuilder<TextEditingValue>(
+          valueListenable: _stationCtrl,
+          builder: (_, v, __) {
+            final ready = _selected != null && v.text.trim().isNotEmpty;
+            return SizedBox(
+              height: 52,
+              child: ElevatedButton.icon(
+                onPressed: _start,
+                icon: const Icon(Icons.arrow_forward),
+                label: Text(_selected != null ? '${_selected!.name} 실사 시작' : '실사 시작',
+                    maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 17)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: ready ? Colors.indigo : const Color(0xFF9FA8DA),
+                  foregroundColor: Colors.white,
+                  shape: const StadiumBorder(),
+                ),
+              ),
+            );
+          },
+        ),
+      ),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
           children: [
-            // ----- 임시저장 목록 -----
+            // ----- 임시저장: 버튼 하나 → 누르면 목록 -----
             if (_drafts.isNotEmpty)
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: Colors.amber.shade50,
-                  border: Border.all(color: Colors.amber.shade300),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text('임시저장된 실사 ${_drafts.length}건',
-                        style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: Colors.brown.shade700)),
-                    ..._drafts.map((d) {
-                      final t = templateById(d.templateId);
-                      return Card(
-                        margin: const EdgeInsets.only(top: 6),
-                        child: ListTile(
-                          dense: true,
-                          title: Text(_shortStation(d.station),
-                              style: const TextStyle(fontWeight: FontWeight.bold)),
-                          subtitle: Text(
-                              '${t?.name ?? d.templateId}${d.floor.isNotEmpty ? ' · ${d.floor}층' : ''}\n'
-                              '${DateFormat('MM/dd HH:mm').format(d.savedAt)} 저장 · 사진 ${d.photoCount}장'),
-                          isThreeLine: true,
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              ElevatedButton(
-                                onPressed: t == null
-                                    ? null
-                                    : () => _openForm(t, d.station, d.floor, d),
-                                child: const Text('이어서'),
-                              ),
-                              IconButton(
-                                tooltip: '임시저장 삭제',
-                                icon: const Icon(Icons.delete_outline,
-                                    color: Colors.red),
-                                onPressed: () => _deleteDraft(d),
-                              ),
-                            ],
-                          ),
-                        ),
-                      );
-                    }),
-                  ],
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: RecordCountButton(
+                  icon: Icons.save_outlined,
+                  label: '임시저장된 실사',
+                  count: _drafts.length,
+                  hint: '눌러서 목록 보기 · 이어서 하기 ›',
+                  bg: Colors.amber.shade50,
+                  border: Colors.amber.shade300,
+                  fg: Colors.brown.shade700,
+                  onTap: _showDrafts,
                 ),
               ),
 
@@ -420,23 +444,10 @@ class _SurveyStartScreenState extends State<SurveyStartScreen> {
               }),
             ],
 
-            const SizedBox(height: 24),
-            SizedBox(
-              height: 52,
-              child: ElevatedButton.icon(
-                onPressed: _start,
-                icon: const Icon(Icons.arrow_forward),
-                label: const Text('실사 시작', style: TextStyle(fontSize: 17)),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.indigo,
-                  foregroundColor: Colors.white,
-                ),
-              ),
-            ),
             const SizedBox(height: 16),
             // 설치된 앱이 최신인지 확인용 (코드 바꿀 때마다 올림)
             const Center(
-              child: Text('실사 빌드 2026-11-03 #16',
+              child: Text('실사 빌드 2026-11-05 #22',
                   style: TextStyle(fontSize: 11, color: Colors.grey)),
             ),
           ],
@@ -744,43 +755,23 @@ class _SurveyFormScreenState extends State<SurveyFormScreen> {
     }
   }
 
-  void _viewPhoto(String key, int idx) {
-    final path = _photos[key]![idx];
-    showDialog(
-      context: context,
-      builder: (c) => Dialog(
-        insetPadding: const EdgeInsets.all(10),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Flexible(child: InteractiveViewer(child: Image.file(File(path)))),
-            Padding(
-              padding: const EdgeInsets.all(6),
-              child: Text(path.split('/').last,
-                  style: const TextStyle(fontSize: 12, color: Colors.grey)),
-            ),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton(
-                  onPressed: () {
-                    setState(() => _photos[key]!.removeAt(idx));
-                    _changed();
-                    Navigator.pop(c);
-                  },
-                  child: const Text('목록에서 빼기',
-                      style: TextStyle(color: Colors.red)),
-                ),
-                TextButton(
-                    onPressed: () => Navigator.pop(c),
-                    child: const Text('닫기')),
-              ],
-            ),
-          ],
-        ),
-      ),
+  // 작은 사진을 누르면 크게 보기 (좌우로 넘기기 · 확대 · 빼기) — 개통과 같은 화면
+  void _viewPhoto(String key, int idx, [String title = '']) {
+    final list = _photos[key];
+    if (list == null || list.isEmpty) return;
+    PhotoViewerPage.open(
+      context,
+      photos: list,
+      start: idx,
+      title: title,
+      removeMessage: '이 칸의 사진 목록에서 빠지고, 밴드에도 안 올라가요.\n(휴대폰 갤러리에 저장된 사진은 그대로예요)',
+      onRemove: (i) {
+        setState(() => list.removeAt(i));
+        _changed();
+      },
     );
   }
+
 
   // ---------------- 값 표시 (단위/접두어) ----------------
   String _fmt(FieldDef f, String key) {
@@ -1152,12 +1143,6 @@ class _SurveyFormScreenState extends State<SurveyFormScreen> {
                       style: const TextStyle(
                           fontWeight: FontWeight.bold, fontSize: 15)),
                 ),
-                if (photos.isNotEmpty)
-                  Text('${photos.length}장 ',
-                      style: const TextStyle(
-                          color: Colors.green,
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold)),
                 IconButton(
                   tooltip: '카메라 (연속 촬영)',
                   icon: const Icon(Icons.photo_camera, color: Colors.indigo),
@@ -1178,7 +1163,7 @@ class _SurveyFormScreenState extends State<SurveyFormScreen> {
                 itemCount: photos.length,
                 separatorBuilder: (_, __) => const SizedBox(width: 6),
                 itemBuilder: (_, i) => GestureDetector(
-                  onTap: () => _viewPhoto(pKey, i),
+                  onTap: () => _viewPhoto(pKey, i, row.photo ?? ''),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(6),
                     child: Image.file(File(photos[i]),
@@ -1496,6 +1481,8 @@ class SurveyPreviewScreen extends StatefulWidget {
   final VoidCallback? onCompleted;
   final String kind; // 실사 / 개통
   final List<String>? photoLabels; // 사진마다 위쪽에 새길 글자 (photos 와 같은 순서, 없으면 안 새김)
+  final void Function(String path)? onRemovePhoto; // 미리보기에서 사진을 뺐을 때 (입력 화면 목록에서도 빼기)
+  final List<String>? photoNotes; // 사진마다 표시 (예: '광함체에도 있음', '중복') — 없으면 표시 안 함
 
   const SurveyPreviewScreen({
     super.key,
@@ -1506,6 +1493,8 @@ class SurveyPreviewScreen extends StatefulWidget {
     this.onCompleted,
     this.kind = '실사',
     this.photoLabels,
+    this.onRemovePhoto,
+    this.photoNotes,
   });
 
   @override
@@ -1515,6 +1504,38 @@ class SurveyPreviewScreen extends StatefulWidget {
 class _SurveyPreviewScreenState extends State<SurveyPreviewScreen> {
   late final TextEditingController _bodyCtrl =
       TextEditingController(text: widget.body);
+  // 첨부 사진 (미리보기에서 뺄 수 있음)
+  late final List<String> _photos = List.of(widget.photos);
+  late final List<String> _labels = [
+    for (var i = 0; i < widget.photos.length; i++)
+      (widget.photoLabels != null && i < widget.photoLabels!.length) ? widget.photoLabels![i] : '',
+  ];
+  late final List<String> _notes = [
+    for (var i = 0; i < widget.photos.length; i++)
+      (widget.photoNotes != null && i < widget.photoNotes!.length) ? widget.photoNotes![i] : '',
+  ];
+
+  /// 첨부 사진 크게 보기 (좌우로 넘기기 · 빼기)
+  Future<void> _openViewer(int start) async {
+    await PhotoViewerPage.open(
+      context,
+      photos: _photos,
+      start: start,
+      labelOf: (i) => i < _labels.length ? _labels[i] : '',
+      noteOf: (i) => i < _notes.length ? _notes[i] : '',
+      removeMessage: '밴드에 올릴 사진에서 빠지고, 입력 화면의 사진 목록에서도 빠져요.\n(휴대폰 갤러리에 저장된 사진은 그대로예요)',
+      onRemove: (i) {
+        final path = _photos[i];
+        setState(() {
+          _photos.removeAt(i);
+          _labels.removeAt(i);
+          _notes.removeAt(i);
+        });
+        widget.onRemovePhoto?.call(path);
+      },
+    );
+    if (mounted) setState(() {});
+  }
 
   @override
   void dispose() {
@@ -1534,7 +1555,7 @@ class _SurveyPreviewScreenState extends State<SurveyPreviewScreen> {
         title: const Text('밴드에 올리기'),
         content: Text('본문이 복사되었습니다.\n\n'
             '1. 밴드 앱이 바로 열립니다.\n'
-            '2. 올릴 밴드를 고르면 사진 ${widget.photos.length}장과 본문이 들어갑니다.\n'
+            '2. 올릴 밴드를 고르면 사진 ${_photos.length}장과 본문이 들어갑니다.\n'
             '3. 본문이 비어 있으면 입력칸을 길게 눌러 [붙여넣기] 하세요.'),
         actions: [
           TextButton(
@@ -1556,10 +1577,10 @@ class _SurveyPreviewScreenState extends State<SurveyPreviewScreen> {
             {
               // label 이 비어 있으면 사진에 글자를 새기지 않고 원본 그대로 전달
               'items': [
-                for (var i = 0; i < widget.photos.length; i++)
+                for (var i = 0; i < _photos.length; i++)
                   {
-                    'path': widget.photos[i],
-                    'label': (widget.photoLabels != null && i < widget.photoLabels!.length) ? widget.photoLabels![i] : '',
+                    'path': _photos[i],
+                    'label': _labels[i],
                   }
               ],
               'text': text,
@@ -1594,11 +1615,11 @@ class _SurveyPreviewScreenState extends State<SurveyPreviewScreen> {
     if (!mounted) return;
     try {
       // subject(제목)를 같이 넘기면 밴드가 본문 위에 한 번 더 붙이므로 본문만 전달
-      if (widget.photos.isEmpty) {
+      if (_photos.isEmpty) {
         await Share.share(text);
       } else {
         await Share.shareXFiles(
-          widget.photos.map((p) => XFile(p)).toList(),
+          _photos.map((p) => XFile(p)).toList(),
           text: text,
         );
       }
@@ -1673,7 +1694,7 @@ class _SurveyPreviewScreenState extends State<SurveyPreviewScreen> {
             decoration: const InputDecoration(border: OutlineInputBorder()),
           ),
           const SizedBox(height: 16),
-          Text('첨부 사진 ${widget.photos.length}장',
+          Text('첨부 사진 ${_photos.length}장 · 누르면 크게 보기',
               style: const TextStyle(fontWeight: FontWeight.bold)),
           const SizedBox(height: 6),
           GridView.count(
@@ -1684,9 +1705,45 @@ class _SurveyPreviewScreenState extends State<SurveyPreviewScreen> {
             physics: const NeverScrollableScrollPhysics(),
             mainAxisSpacing: 4,
             crossAxisSpacing: 4,
-            children: widget.photos
-                .map((p) => Image.file(File(p), fit: BoxFit.cover, cacheWidth: 200))
-                .toList(),
+            children: [
+              for (var i = 0; i < _photos.length; i++)
+                GestureDetector(
+                  onTap: () => _openViewer(i),
+                  child: Stack(fit: StackFit.expand, children: [
+                    Image.file(File(_photos[i]), fit: BoxFit.cover, cacheWidth: 200),
+                    // 겹친 사진 표시 (다른 칸에도 있으면 주황, 같은 칸에 두 번이면 빨강)
+                    if (_notes[i].isNotEmpty) ...[
+                      Container(
+                        decoration: BoxDecoration(
+                            border: Border.all(color: _notes[i] == '중복' ? const Color(0xFFD32F2F) : const Color(0xFFEF6C00), width: 3)),
+                      ),
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        child: Container(
+                          color: (_notes[i] == '중복' ? const Color(0xFFD32F2F) : const Color(0xFFEF6C00)).withValues(alpha: 0.85),
+                          padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 1),
+                          child: Text(_notes[i],
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold, height: 1.1)),
+                        ),
+                      ),
+                    ],
+                    Positioned(
+                      left: 3,
+                      top: 3,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                        decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(8)),
+                        child: Text('${i + 1}', style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
+                      ),
+                    ),
+                  ]),
+                ),
+            ],
           ),
         ],
       ),
@@ -1710,3 +1767,4 @@ class _SurveyPreviewScreenState extends State<SurveyPreviewScreen> {
     );
   }
 }
+
